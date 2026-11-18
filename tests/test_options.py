@@ -80,8 +80,7 @@ def test_contents_per_floor_are_honoured(asset_key, options, check):
 @pytest.mark.parametrize("asset_key", ["residential", "hotel", "hotel_apartments"])
 def test_units_per_floor_vary_inside_the_chosen_range(asset_key):
     counts = {sum(f["units"].values()) for f in _occupied(make_spec(
-        asset_key, "DBC-M2", seed=4, options={"units_per_floor_min": 8, "units_per_floor_max": 14}))
-        if f["use"] != "Penthouse"}
+        asset_key, "DBC-M2", seed=4, options={"units_per_floor_min": 8, "units_per_floor_max": 14}))}
     assert len(counts) > 1 and min(counts) >= 8 and max(counts) <= 14
     with pytest.raises(ValueError, match="above max"):
         make_spec(asset_key, "DBC-M1", seed=1, options={"units_per_floor_min": 9, "units_per_floor_max": 8})

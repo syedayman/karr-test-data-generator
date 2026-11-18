@@ -27,7 +27,6 @@ from testgen.assets import (
     ASSETS,
     HOTEL_APARTMENT_UNIT_TYPES,
     HOTEL_STARS,
-    PENTHOUSE_TYPES,
     RESIDENTIAL_UNIT_TYPES,
     asset_for,
 )
@@ -184,7 +183,7 @@ def size_fields(asset, model: str) -> list[list[Field]]:
     first += [Field("typical_floor_height_m", "Typical floor height (m)", "float", 2.5, 9.0, 0.05),
               Field("ground_floor_height_m", "Ground floor height (m)", "float", 2.5, 10.0, 0.05)]
     unit_types = Field("unit_types", "Unit types", "multi", span=2, choices=tuple(
-        RESIDENTIAL_UNIT_TYPES + PENTHOUSE_TYPES if asset.key == "residential" else HOTEL_APARTMENT_UNIT_TYPES))
+        RESIDENTIAL_UNIT_TYPES if asset.key == "residential" else HOTEL_APARTMENT_UNIT_TYPES))
     units = [Field("units_per_floor_min", "Min units per floor", "int", 1, 80),
              Field("units_per_floor_max", "Max units per floor", "int", 1, 80)]
     rooms = "Lecture rooms" if asset.key == "universities" else "Classrooms"

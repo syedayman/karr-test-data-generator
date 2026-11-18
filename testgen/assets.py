@@ -69,14 +69,13 @@ VALID_SPEEDS = [1.0, 1.75, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
 HOTEL_APARTMENT_UNIT_TYPES = ["Studio", "1BR", "2BR", "3BR", "4BR"]
 RESIDENTIAL_UNIT_TYPES = ["Studio", "1BR", "2BR", "3BR", "4BR", "5BR", "6BR",
                           "3BR + Maid", "4BR + Maid", "4BR Duplex", "5BR Duplex"]
-PENTHOUSE_TYPES = ["Penthouse", "5BR Penthouse", "6BR Penthouse", "5BR Penthouse Duplex"]
 
 
 def residential_unit_occupancy(name: str) -> float:
     """People per unit, read off the column name the way KARR AI's Residential reader does.
 
     DBC Table D.5: studio 1.5, 1BR 1.8, 2BR 3, 3BR 4, 4BR 5, then 1 more per bedroom; a
-    penthouse or townhouse with no bedroom count 5; a duplex / triplex or maid's room adds 1.
+    duplex / triplex or maid's room adds 1.
     """
     s = name.lower()
     bedrooms = re.search(r"(\d+)\s*br\b", s)
@@ -85,8 +84,6 @@ def residential_unit_occupancy(name: str) -> float:
     elif bedrooms:
         n = int(bedrooms.group(1))
         base = n + 1.0 if n >= 4 else {1: 1.8, 2: 3.0, 3: 4.0}[n]
-    elif re.search(r"\bpenthouse\b|\btownhouse\b", s):
-        base = 5.0
     else:
         raise ValueError(f"No occupancy rate for {name!r}")
     duplex = bool(re.search(r"\bduplex\b|\btriplex\b", s))
@@ -94,7 +91,7 @@ def residential_unit_occupancy(name: str) -> float:
     return base + duplex + maid
 
 
-RESIDENTIAL_UNIT_OCCUPANCY = {t: residential_unit_occupancy(t) for t in RESIDENTIAL_UNIT_TYPES + PENTHOUSE_TYPES}
+RESIDENTIAL_UNIT_OCCUPANCY = {t: residential_unit_occupancy(t) for t in RESIDENTIAL_UNIT_TYPES}
 HOTEL_APARTMENT_UNIT_OCCUPANCY = {"Studio": 1.0, "1BR": 1.5, "2BR": 2.5, "3BR": 3.5, "4BR": 4.5}
 HOTEL_KEY_OCCUPANCY = {"1-2": 1.5, "3": 1.5, "4-5": 1.8}
 CAR_OCCUPANCY = {"Independent": 1.5, "Retail/Mall Attached": 3.0}

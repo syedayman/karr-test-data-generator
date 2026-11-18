@@ -514,9 +514,8 @@ def resolved_options(spec: dict) -> dict:
         "passenger_capacity_kg": sp.get("passenger_capacity_kg"),
         "fire_service_capacity_kg": sp.get("fire_service_capacity_kg"),
     }
-    penthouses = [f for f in occupied if f.get("use") == "Penthouse"]
     if asset.key in ("residential", "hotel_apartments", "hotel"):
-        counts = [sum(f["units"].values()) for f in occupied if f not in penthouses]
+        counts = [sum(f["units"].values()) for f in occupied]
         out["units_per_floor_min"], out["units_per_floor_max"] = min(counts), max(counts)
     if asset.key in ("residential", "hotel_apartments"):
         out["unit_types"] = list(spec.get("unit_types") or [])
