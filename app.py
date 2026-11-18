@@ -600,8 +600,8 @@ with tab_new:
         hint = ""
         if API_KEY:
             c1, c2, c3 = st.columns([1, 1, 2], vertical_alignment="bottom")
-            use_text = c1.toggle("AI text", value=True, key="ai-text")
-            use_image = c2.toggle("AI render", value=True, key="ai-img")
+            use_text = c1.toggle("AI text", value=False, key="ai-text")
+            use_image = c2.toggle("AI render", value=False, key="ai-img")
             if use_text:
                 hint = c3.text_input("Direction for the AI", key="ai-hint")
 
@@ -650,7 +650,7 @@ with tab_batch:
         per_combo = c1.number_input("Per type and method", min_value=1, max_value=5, value=1, step=1)
         batch_text = batch_image = False
         if API_KEY:
-            batch_text = c2.toggle("AI text", value=True, key="b-text")
+            batch_text = c2.toggle("AI text", value=False, key="b-text")
             batch_image = c3.toggle("AI renders", value=False, key="b-img")
         total = len(combos) * per_combo
         batch_inputs = ("Random",)
