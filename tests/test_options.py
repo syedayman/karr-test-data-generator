@@ -7,7 +7,16 @@ import pytest
 from testgen import charts, floor_table
 from testgen.assets import ASSETS
 from testgen.floors import occupied_limits
-from testgen.spec import derive, make_spec, refresh, resolved_options, validate, with_story
+from testgen.spec import (
+    derive,
+    entrance_problems,
+    karr_entrance_bias,
+    make_spec,
+    refresh,
+    resolved_options,
+    validate,
+    with_story,
+)
 
 COMBOS = [(k, m) for k, a in ASSETS.items() for m in (["DBC-M1", "DBC-M2"] if a.supports_m2 else ["DBC-M1"])]
 
@@ -46,7 +55,7 @@ def test_a_floor_count_on_the_wrong_side_of_the_m1_limit_is_refused(asset_key, m
 def test_size_options_are_honoured():
     spec = make_spec("residential", "DBC-M1", seed=3, options={
         "occupied_floors": 12, "basements": 2, "typical_floor_height_m": 3.25, "ground_floor_height_m": 5.5,
-        "unit_types": ["Studio", "2BR"], "units_per_floor": 9, "amenity_floor": False})
+        "unit_types": ["Studio", "2BR"], "units_per_floor_min": 9, "units_per_floor_max": 9, "penthouse_floors": 0})
     assert spec["unit_types"] == ["Studio", "2BR"]
     assert all(sum(f["units"].values()) == 9 and f["height_m"] == 3.25 for f in _occupied(spec))
     assert [f["name"] for f in spec["floors"] if f.get("cars")] == ["B1", "B2"]
@@ -55,8 +64,8 @@ def test_size_options_are_honoured():
 
 
 @pytest.mark.parametrize("asset_key,options,check", [
-    ("hotel", {"units_per_floor": 18}, lambda f: sum(f["units"].values()) == 18),
-    ("hotel_apartments", {"units_per_floor": 7}, lambda f: sum(f["units"].values()) == 7),
+    ("hotel", {"units_per_floor_min": 18, "units_per_floor_max": 18}, lambda f: sum(f["units"].values()) == 18),
+    ("hotel_apartments", {"units_per_floor_min": 7, "units_per_floor_max": 7}, lambda f: sum(f["units"].values()) == 7),
     ("office", {"floor_area_m2": 950}, lambda f: f["area_m2"] == 950),
     ("car_parking", {"cars_per_floor": 120}, lambda f: f["cars"] == 120),
     ("retail", {"floor_area_m2": 6000}, lambda f: f["name"] == "Roof" or f["area_m2"] == 6000),
@@ -66,6 +75,38 @@ def test_size_options_are_honoured():
 def test_contents_per_floor_are_honoured(asset_key, options, check):
     spec = make_spec(asset_key, "DBC-M1", seed=5, options=options)
     assert all(check(f) for f in _occupied(spec))
+
+
+@pytest.mark.parametrize("asset_key", ["residential", "hotel", "hotel_apartments"])
+def test_units_per_floor_vary_inside_the_chosen_range(asset_key):
+    counts = {sum(f["units"].values()) for f in _occupied(make_spec(
+        asset_key, "DBC-M2", seed=4, options={"units_per_floor_min": 8, "units_per_floor_max": 14}))
+        if f["use"] != "Penthouse"}
+    assert len(counts) > 1 and min(counts) >= 8 and max(counts) <= 14
+    with pytest.raises(ValueError, match="above max"):
+        make_spec(asset_key, "DBC-M1", seed=1, options={"units_per_floor_min": 9, "units_per_floor_max": 8})
+
+
+@pytest.mark.parametrize("asset_key,model", COMBOS)
+def test_setup_fields_get_karr_ai_defaults(asset_key, model):
+    """What KARR AI's setup page fills in before the tester touches it."""
+    spec = make_spec(asset_key, model, seed=2)
+    assert spec["building"]["has_authority_exceptions"] is False
+    assert spec["vt_criteria"]["core_count"] == 1
+    assert spec["vt_criteria"]["serves_roof"] is False
+    assert spec["vt_criteria"]["multipurpose_elevator"] is (asset_key == "schools" and model == "DBC-M1")
+    assert spec["project_info"]["revision_details"] == "First draft"
+    if ASSETS[asset_key].hotel_like:
+        assert not spec["building"]["has_operator"] and not spec["building"]["has_amenities"]
+    if asset_key == "car_parking":
+        assert spec["project_info"]["car_parking_facility_type"] == "Independent"
+        assert spec["project_info"]["car_parking_has_escalators"] is False
+
+
+@pytest.mark.parametrize("stars,kg", [("1-2", (1350, 1600)), ("3", (1600, 1600)), ("4-5", (1600, 2000))])
+def test_hotel_capacities_follow_the_star_tier(stars, kg):
+    sp = make_spec("hotel", "DBC-M1", seed=1, options={"hotel_star_rating": stars})["space_planning"]
+    assert (sp["passenger_capacity_kg"], sp["fire_service_capacity_kg"]) == kg
 
 
 def test_office_without_mezzanine():
@@ -95,7 +136,7 @@ def test_a_chosen_name_and_location_survive_the_ai_story():
 
 
 def test_the_chart_check_flags_buildings_outside_the_m1_chart():
-    crowded = make_spec("residential", "DBC-M1", seed=1, options={"occupied_floors": 30, "units_per_floor": 60})
+    crowded = make_spec("residential", "DBC-M1", seed=1, options={"occupied_floors": 30, "units_per_floor_min": 60})
     assert any("the M1 chart covers" in p for p in charts.check(crowded))
     deep = make_spec("residential", "DBC-M1", seed=1, options={"occupied_floors": 3, "basements": 5})
     assert any("boarding floors" in p for p in charts.check(deep))
@@ -177,3 +218,25 @@ def test_the_values_shown_as_picked_are_the_ones_the_project_uses(asset_key, mod
     again = make_spec(asset_key, model, seed=seed, options=fixed)
     assert resolved_options(again) == picked
     assert again["floors"] == spec["floors"]
+
+
+def test_residential_parking_drives_karr_entrance_bias():
+    spec = make_spec("residential", "DBC-M2", seed=1, options={"basements": 2, "cars_per_basement": 100})
+    rows = karr_entrance_bias(spec)
+    assert [(r["floor"], r["cars"]) for r in rows] == [("GF", 0), ("B1", 100), ("B2", 100)]
+    share = 150 / derive(spec)["population"] * 100  # 100 cars x 1.5 people
+    assert rows[1]["percent"] == pytest.approx(share)
+    assert rows[0]["percent"] == pytest.approx(100 - 2 * share)
+    assert sum(r["study"] for r in rows) == 100 and not entrance_problems(spec)
+    crowded = make_spec("residential", "DBC-M1", seed=1, options={"basements": 3, "cars_per_basement": 900})
+    assert entrance_problems(crowded)
+
+
+@pytest.mark.parametrize("asset_key,model,printed", [
+    ("office", "DBC-M2", True), ("office", "DBC-M1", False), ("hotel", "DBC-M2", False),
+    ("retail", "DBC-M1", False), ("universities", "DBC-M2", False),
+])
+def test_cars_per_basement_and_where_karr_prints_entrance_bias(asset_key, model, printed):
+    spec = make_spec(asset_key, model, seed=2, options={"basements": 1, "cars_per_basement": 80})
+    assert [f.get("cars") for f in spec["floors"] if f.get("boarding") and f.get("use") != "Main lobby"][-1] == 80
+    assert bool(karr_entrance_bias(spec)) == printed

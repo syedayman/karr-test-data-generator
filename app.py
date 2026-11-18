@@ -23,8 +23,15 @@ import streamlit as st
 import json_format
 import views
 from testgen import ai, charts, floor_table
-from testgen.assets import ASSETS, HOTEL_STARS, UNIT_TYPES, asset_for
-from testgen.bundle import build_files, file_names, zip_files, zip_name
+from testgen.assets import (
+    ASSETS,
+    HOTEL_APARTMENT_UNIT_TYPES,
+    HOTEL_STARS,
+    PENTHOUSE_TYPES,
+    RESIDENTIAL_UNIT_TYPES,
+    asset_for,
+)
+from testgen.bundle import IMAGES, RENDER, build_files, file_names, zip_files, zip_name
 from testgen.excel import workbook_sheets
 from testgen.floors import SIZING, occupied_limits
 from testgen.spec import (
@@ -40,6 +47,7 @@ from testgen.spec import (
     make_spec,
     refresh,
     resolved_options,
+    entrance_problems,
     simulation_problems,
     validate,
     with_story,
@@ -173,17 +181,20 @@ def size_fields(asset, model: str) -> list[list[Field]]:
     first = [Field("occupied_floors", FLOOR_LABEL[asset.key], "int", lo, hi)]
     if SIZING[asset.key]["basements"] is not None:
         first.append(Field("basements", "Basements", "int", 0, 5))
-    first += [Field("typical_floor_height_m", "Floor height (m)", "float", 2.5, 9.0, 0.05),
-              Field("ground_floor_height_m", "Ground height (m)", "float", 2.5, 10.0, 0.05)]
-    unit_types = Field("unit_types", "Unit types", "multi", choices=tuple(UNIT_TYPES), span=2)
-    units = Field("units_per_floor", "Units per floor", "int", 1, 80)
+    first += [Field("typical_floor_height_m", "Typical floor height (m)", "float", 2.5, 9.0, 0.05),
+              Field("ground_floor_height_m", "Ground floor height (m)", "float", 2.5, 10.0, 0.05)]
+    unit_types = Field("unit_types", "Unit types", "multi", span=2, choices=tuple(
+        RESIDENTIAL_UNIT_TYPES if asset.key == "residential" else HOTEL_APARTMENT_UNIT_TYPES))
+    units = [Field("units_per_floor_min", "Min units per floor", "int", 1, 80),
+             Field("units_per_floor_max", "Max units per floor", "int", 1, 80)]
     rooms = "Lecture rooms" if asset.key == "universities" else "Classrooms"
     education = [Field("classrooms_per_floor", f"{rooms} per floor", "int", 1, 60),
                  Field("students_per_classroom", "Students per room", "int", 1, 200)]
     second = {
-        "residential": [unit_types, units, Field("amenity_floor", "Amenity floor", "yesno")],
-        "hotel_apartments": [unit_types, units],
-        "hotel": [Field("units_per_floor", "Keys per floor", "int", 1, 120)],
+        "residential": [unit_types, *units],
+        "hotel_apartments": [unit_types, *units],
+        "hotel": [Field("units_per_floor_min", "Min keys per floor", "int", 1, 120),
+                  Field("units_per_floor_max", "Max keys per floor", "int", 1, 120)],
         "office": [Field("floor_area_m2", "Area per floor (m²)", "int", 50, 20000, 50),
                    Field("mezzanine", "Mezzanine", "yesno")],
         "car_parking": [Field("cars_per_floor", "Cars per level", "int", 1, 2000, 5)],
@@ -191,11 +202,16 @@ def size_fields(asset, model: str) -> list[list[Field]]:
         "schools": education,
         "universities": education,
     }
-    return [first, second[asset.key]]
+    third = [[Field("cars_per_basement", "Cars per basement", "int", 0, 2000, 5)]] \
+        if SIZING[asset.key]["basements"] is not None else []
+    return [first, second[asset.key], *third]
 
 
 def option_fields(asset, model: str) -> list[list[Field]]:
     row = []
+    if asset.key == "residential":
+        row += [Field("penthouse_floors", "Penthouse floors", "int", 0, 4),
+                Field("penthouse_type", "Penthouse type", "choice", choices=tuple(PENTHOUSE_TYPES))]
     if asset.key == "hotel":
         row.append(Field("hotel_star_rating", "Stars", "choice", choices=tuple(HOTEL_STARS)))
     if asset.hotel_like:
@@ -402,6 +418,7 @@ def status(spec: dict, problems: list[str]) -> None:
         line = ""
     line += "".join(f'<div class="tg-status bad">No acceptable simulation: {escape(p)}</div>'
                     for p in simulation_problems(spec))
+    line += "".join(f'<div class="tg-status bad">Entrance bias: {escape(p)}</div>' for p in entrance_problems(spec))
     st.html(line)
 
 
@@ -430,7 +447,7 @@ def stack(spec: dict) -> None:
 def finish(spec: dict, render: bytes | None, source: str, notes: list[str]) -> None:
     """Build every file and make it the current project. source: drawn, AI or uploaded render."""
     files = build_files(spec, render if source != "drawn" else None)
-    drawn = files.get("03 Project render.png") or render
+    drawn = files.get(RENDER) or render
     if drawn is None:
         from testgen.images import fallback_render
 
@@ -455,7 +472,7 @@ def create_project(asset_key: str, model: str, opts: dict, seed: int,
         except Exception as e:  # noqa: BLE001
             notes.append(f"AI text failed, built-in names used ({e.__class__.__name__}: {e})")
     render = None
-    if use_ai_image and client and "03 Project render.png" not in (opts.get("skip_outputs") or []):
+    if use_ai_image and client and IMAGES not in (opts.get("skip_outputs") or []):
         try:
             render = ai.generate_render(client, IMAGE_MODEL, spec["story"]["render_prompt"])
         except Exception as e:  # noqa: BLE001

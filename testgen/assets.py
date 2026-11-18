@@ -49,6 +49,13 @@ BY_CLASSIFICATION = {a.classification: a for a in ASSETS.values()}
 HOTEL_STAR_AWT = {"1-2": 40, "3": 35, "4-5": 30}
 HOTEL_STARS = ["1-2", "3", "4-5"]
 
+
+def default_capacities(asset: Asset, stars: str | None = None) -> tuple[int, int]:
+    """(passenger, fire/service) kg the KARR AI setup page fills in; hotels go by star tier."""
+    if asset.key == "hotel":
+        return (1350 if stars == "1-2" else 1600), (2000 if stars == "4-5" else 1600)
+    return asset.passenger_kg, asset.fire_kg
+
 # Speeds KARR AI's lift configuration chart covers, by machine type.
 MRL_SPEEDS = [1.0, 1.75]
 MRA_SPEEDS = [2.5, 3.0, 3.5, 4.0, 5.0, 6.0]
@@ -59,11 +66,40 @@ VALID_SPEEDS = [1.0, 1.75, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0]
 # residential = legacy_worker `_header_to_base_factor`, hotel apartments =
 # HotelApartmentsConfig.get_occupancy_factor (DBC D.18), hotels = per key by
 # star (DBC D.12), parking = per car (DBC D.27).
-UNIT_TYPES = ["Studio", "1BR", "2BR", "3BR", "4BR"]
-RESIDENTIAL_UNIT_OCCUPANCY = {"Studio": 1.5, "1BR": 1.8, "2BR": 3.0, "3BR": 4.0, "4BR": 5.0}
+HOTEL_APARTMENT_UNIT_TYPES = ["Studio", "1BR", "2BR", "3BR", "4BR"]
+RESIDENTIAL_UNIT_TYPES = ["Studio", "1BR", "2BR", "3BR", "4BR", "5BR", "6BR",
+                          "3BR + Maid", "4BR + Maid", "4BR Duplex", "5BR Duplex"]
+PENTHOUSE_TYPES = ["Penthouse", "5BR Penthouse", "6BR Penthouse", "5BR Penthouse Duplex"]
+
+
+def residential_unit_occupancy(name: str) -> float:
+    """People per unit, read off the column name the way KARR AI's Residential reader does.
+
+    DBC Table D.5: studio 1.5, 1BR 1.8, 2BR 3, 3BR 4, 4BR 5, then 1 more per bedroom; a
+    penthouse or townhouse with no bedroom count 5; a duplex / triplex or maid's room adds 1.
+    """
+    s = name.lower()
+    bedrooms = re.search(r"(\d+)\s*br\b", s)
+    if "studio" in s:
+        base = 1.5
+    elif bedrooms:
+        n = int(bedrooms.group(1))
+        base = n + 1.0 if n >= 4 else {1: 1.8, 2: 3.0, 3: 4.0}[n]
+    elif re.search(r"\bpenthouse\b|\btownhouse\b", s):
+        base = 5.0
+    else:
+        raise ValueError(f"No occupancy rate for {name!r}")
+    duplex = bool(re.search(r"\bduplex\b|\btriplex\b", s))
+    maid = bool(re.search(r"\+\s*m\b|\bmaid\b|\bhk\b|\bhousekeeper\b", s))
+    return base + duplex + maid
+
+
+RESIDENTIAL_UNIT_OCCUPANCY = {t: residential_unit_occupancy(t) for t in RESIDENTIAL_UNIT_TYPES + PENTHOUSE_TYPES}
 HOTEL_APARTMENT_UNIT_OCCUPANCY = {"Studio": 1.0, "1BR": 1.5, "2BR": 2.5, "3BR": 3.5, "4BR": 4.5}
 HOTEL_KEY_OCCUPANCY = {"1-2": 1.5, "3": 1.5, "4-5": 1.8}
 CAR_OCCUPANCY = {"Independent": 1.5, "Retail/Mall Attached": 3.0}
+# People per parked car in KARR AI's Entrance Bias sheet (unitmix_processor_v2.write_entrance_bias_sheet_web).
+ENTRANCE_PEOPLE_PER_CAR = 1.5
 
 # Occupancy rates written into the Operator Profile sheet. KARR AI rejects a
 # profile without a "Default Occupancy" line.

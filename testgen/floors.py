@@ -15,12 +15,16 @@ Options (all optional; a missing option is picked at random from `SIZING`):
     occupied_floors          floors KARR AI counts as occupied (Y in Lifts Stacking Mix)
     basements                parking basements below ground
     typical_floor_height_m, ground_floor_height_m
-    unit_types               residential / hotel apartments, e.g. ["Studio", "1BR"]
-    units_per_floor          residential / hotel apartment units, hotel keys
+    unit_types               residential / hotel apartments, e.g. ["Studio", "1BR"] (typical floors)
+    penthouse_floors, penthouse_type
+                             residential: top floors with a few penthouses of one type
+    cars_per_basement        parking spaces on each basement (every type with basements)
+    units_per_floor_min, units_per_floor_max
+                             residential / hotel apartment units, hotel keys; the floors come in
+                             runs, each with its own count inside this range
     floor_area_m2            office / retail area per floor
     cars_per_floor           car parking spaces per level
     classrooms_per_floor, students_per_classroom   schools / universities
-    amenity_floor            residential: a residents' amenities level
     mezzanine                office: a mezzanine above ground
     moving_walks             retail: a trolley use (hypermarket) on the ground floor, or none
 
@@ -34,7 +38,17 @@ from __future__ import annotations
 
 import random
 
-from .assets import CAR_OCCUPANCY, TROLLEY_USE_RE, UNIT_TYPES, Asset, key_occupancy, unit_occupancy
+from .assets import (
+    CAR_OCCUPANCY,
+    ENTRANCE_PEOPLE_PER_CAR,
+    TROLLEY_USE_RE,
+    HOTEL_APARTMENT_UNIT_TYPES,
+    PENTHOUSE_TYPES,
+    RESIDENTIAL_UNIT_TYPES,
+    Asset,
+    key_occupancy,
+    unit_occupancy,
+)
 from .charts import PUBLIC_AREA_M2_PER_PERSON, chart_range, max_boarding
 
 # Auto ranges per asset. occupied_m1 / occupied_m2 are picked when no floor
@@ -102,12 +116,16 @@ def _ground(rng: random.Random, asset: Asset, opts: dict, use: str, name: str = 
 
 def _basements(rng: random.Random, asset: Asset, opts: dict, cars_range: tuple[int, int],
                name=lambda i: f"B{i}", use: str = "Parking", most: int | None = None) -> list[dict]:
-    """Parking basements; an auto count stays at or under `most` (the chart's boarding limit)."""
+    """Parking basements; an auto count stays at or under `most` (the chart's boarding limit).
+
+    Each basement holds `cars_per_basement` cars when the tester set it, else a random count in `cars_range`.
+    """
     lo, hi = SIZING[asset.key]["basements"]
     auto = rng.randint(lo, hi)
     count = int(choose(opts, "basements", auto if most is None else max(0, min(auto, most))))
     return [{"name": name(i), "height_m": _round_h(rng.uniform(3.0, 3.6)), "use": use,
-             "cars": rng.randint(*cars_range), "occupied": False, "boarding": True}
+             "cars": int(choose(opts, "cars_per_basement", rng.randint(*cars_range))),
+             "occupied": False, "boarding": True}
             for i in range(1, count + 1)]
 
 
@@ -149,12 +167,13 @@ _RESI_MIXES = [
     ["1BR", "2BR", "3BR"],
     ["Studio", "1BR", "2BR", "3BR"],
     ["1BR", "2BR", "3BR", "4BR"],
+    ["2BR", "3BR + Maid", "4BR", "5BR"],
 ]
 
 
-def _split(rng: random.Random, types: list[str], total: int) -> dict[str, int]:
-    """Spread `total` units over the types with random weights (largest remainder)."""
-    weights = [rng.uniform(0.5, 1.5) for _ in types]
+def _split(rng: random.Random, types: list[str], total: int, weights: list[float] | None = None) -> dict[str, int]:
+    """Spread `total` units over the types by `weights` (random when none), largest remainder."""
+    weights = weights or [rng.uniform(0.5, 1.5) for _ in types]
     raw = [total * w / sum(weights) for w in weights]
     counts = [int(r) for r in raw]
     for i in sorted(range(len(raw)), key=lambda i: raw[i] - counts[i], reverse=True):
@@ -164,55 +183,125 @@ def _split(rng: random.Random, types: list[str], total: int) -> dict[str, int]:
     return dict(zip(types, counts))
 
 
-def _unit_plan(rng: random.Random, types: list[str], rates: dict[str, float],
-               people_per_floor: float, units: int | None = None) -> dict[str, int]:
-    """A per-floor unit mix: `units` units, or as many as house about `people_per_floor`."""
-    if units is None:
-        avg = sum(rates.get(t, 2.0) for t in types) / len(types)
-        units = max(2, round(people_per_floor / avg))
-    return _split(rng, types, int(units))
+def _runs(rng: random.Random, n: int) -> list[int]:
+    """Split n floors (bottom up) into 1-4 runs; each run gets its own unit count."""
+    most = 1 if n < 3 else 2 if n < 6 else 3 if n < 15 else 4
+    k = rng.randint(min(2, most), most)
+    cuts = sorted(rng.sample(range(1, n), k - 1))
+    return [b - a for a, b in zip([0, *cuts], [*cuts, n])]
 
 
-def _unit_types(rng: random.Random, opts: dict, choices: list[list[str]]) -> list[str]:
+def _run_people(rng: random.Random, per_floor: float, runs: list[int]) -> list[float]:
+    """People per floor in each run: more low down, averaging `per_floor` over the building."""
+    factors = sorted((rng.uniform(0.8, 1.2) for _ in runs), reverse=True)
+    mean = sum(f * s for f, s in zip(factors, runs)) / sum(runs)
+    return [per_floor * f / mean for f in factors]
+
+
+def _run_counts(rng: random.Random, opts: dict, auto: list[int]) -> list[int]:
+    """Each run's units per floor (bottom up, most at the bottom).
+
+    Auto counts outside the tester's min / max are drawn again inside it. With both
+    set, the lowest run gets the max and the highest run the min, so the range is used.
+    """
+    draws = [rng.random() for _ in auto]
+    lo, hi = opts.get("units_per_floor_min"), opts.get("units_per_floor_max")
+    if lo is None and hi is None:
+        return auto
+    both = lo is not None and hi is not None
+    lo = int(lo) if lo is not None else min(int(hi), min(auto))
+    hi = int(hi) if hi is not None else max(lo, max(auto))
+    counts = sorted((a if lo <= a <= hi else lo + int(d * (hi - lo + 1)) for a, d in zip(auto, draws)),
+                    reverse=True)
+    if both and len(counts) > 1:
+        counts[0], counts[-1] = hi, lo
+    return counts
+
+
+def _floor_plans(rng: random.Random, opts: dict, occ: int, people_per_floor: float,
+                 count_for, plan_for) -> list:
+    """One plan per occupied floor, bottom up; the floors of a run share a plan.
+
+    count_for(run, people) -> auto units for that many people; plan_for(run, units) -> the floor's contents.
+    """
+    runs = _runs(rng, occ)
+    people = _run_people(rng, people_per_floor, runs)
+    counts = _run_counts(rng, opts, [count_for(i, p) for i, p in enumerate(people)])
+    return [plan for i, (size, c) in enumerate(zip(runs, counts)) for plan in [plan_for(i, c)] * size]
+
+
+def _unit_plans(rng: random.Random, opts: dict, types: list[str], rates: dict[str, float],
+                occ: int, people_per_floor: float) -> list[dict[str, int]]:
+    """Unit mixes per occupied floor, bottom up.
+
+    Each run draws its mix first and sizes its unit count from that mix, so a run heavy in
+    large units gets fewer of them and the population stays where it was aimed.
+    """
+    mixes = [[rng.uniform(0.5, 1.5) for _ in types] for _ in range(4)]  # one per possible run
+    avg = [sum(w * rates.get(t, 2.0) for w, t in zip(mix, types)) / sum(mix) for mix in mixes]
+    return _floor_plans(rng, opts, occ, people_per_floor, lambda i, p: max(2, round(p / avg[i])),
+                        lambda i, units: _split(rng, types, units, mixes[i]))
+
+
+def _unit_types(rng: random.Random, opts: dict, choices: list[list[str]], allowed: list[str]) -> list[str]:
     auto = rng.choice(choices)
-    picked = [t for t in UNIT_TYPES if t in (opts.get("unit_types") or [])]
+    picked = [t for t in allowed if t in (opts.get("unit_types") or [])]
     return picked or auto
+
+
+def _penthouses(rng: random.Random, opts: dict, occ: int) -> tuple[str, list[int]]:
+    """(type, units on each penthouse floor top down); always draws, so other picks stay put."""
+    auto_floors = rng.choice([0, 0, 1, 1, 2])
+    kind = choose(opts, "penthouse_type", rng.choice(PENTHOUSE_TYPES))
+    units = [rng.randint(1, 4) for _ in range(4)]
+    floors = min(int(choose(opts, "penthouse_floors", auto_floors)), occ - 1)
+    return kind, units[:max(0, floors)]
 
 
 def residential(rng: random.Random, asset: Asset, model: str, opts: dict) -> tuple[list[dict], list[str]]:
     occ = _occupied(rng, asset, model, opts)
-    types = _unit_types(rng, opts, _RESI_MIXES)
+    types = _unit_types(rng, opts, _RESI_MIXES, RESIDENTIAL_UNIT_TYPES)
     rates = unit_occupancy(asset.key)
     typical_h = _typical_h(rng, asset, opts)
-    want_amenity = bool(choose(opts, "amenity_floor", rng.random() < 0.6))
-    amenity_level = rng.randint(1, max(1, occ - 1)) if want_amenity and occ >= 2 else None
-
     target = _people_target(rng, asset, model, occ, chart_range(asset.key, occ))
-    per_floor_units = opts.get("units_per_floor")
-    lower = _unit_plan(rng, types, rates, target / occ * 1.03, per_floor_units)
-    upper = _unit_plan(rng, types, rates, target / occ * 0.97, per_floor_units)
+    ph_type, ph_units = _penthouses(rng, opts, occ)
+    typical = occ - len(ph_units)
+    per_floor = max(target - rates[ph_type] * sum(ph_units), typical * 4) / typical
+    plans = _unit_plans(rng, opts, types, rates, typical, per_floor)  # bottom up
 
-    # Levels bottom to top; an optional amenities level sits among them.
-    kinds = ["res"] * occ
-    if amenity_level:
-        kinds.insert(amenity_level, "amenity")
     floors: list[dict] = [_roof(rng)]
-    for idx in range(len(kinds) - 1, -1, -1):
-        name = str(idx + 1)
-        if kinds[idx] == "amenity":
-            floors.append({"name": name, "height_m": _round_h(typical_h + 1.0),
-                           "use": "Residents' amenities (gym, pool deck)",
-                           "occupied": False, "boarding": False})
-        else:
-            plan = upper if idx > len(kinds) / 2 else lower
-            floors.append({"name": name, "height_m": typical_h, "use": "Residential",
-                           "units": dict(plan), "occupied": True, "boarding": False})
+    for level, units in zip(range(occ, typical, -1), ph_units):
+        floors.append({"name": str(level), "height_m": typical_h, "use": "Penthouse",
+                       "units": {ph_type: units}, "occupied": True, "boarding": False})
+    for level in range(typical, 0, -1):
+        floors.append({"name": str(level), "height_m": typical_h, "use": "Residential",
+                       "units": dict(plans[level - 1]), "occupied": True, "boarding": False})
+    if ph_units:
+        types = [*types, ph_type]
 
     floors.append(_ground(rng, asset, opts, "Main entrance lobby, retail"))
-    floors += _basements(rng, asset, opts, (60, 160), most=_basement_room(asset, model, occ, 1))
+    basements = _basements(rng, asset, opts, (60, 160), most=_basement_room(asset, model, occ, 1))
+    people = sum(rates.get(t, 2.0) * n for f in floors if f.get("units") for t, n in f["units"].items())
+    for b, cars in zip(basements, _resi_cars(rng, opts, len(basements), people)):
+        b["cars"] = cars
+    floors += basements
     for f in floors:
         f.setdefault("units", {t: 0 for t in types})
     return floors, types
+
+
+def _resi_cars(rng: random.Random, opts: dict, count: int, people: float) -> list[int]:
+    """Cars per basement: the tester's count, else spaces for 30-50% of the residents.
+
+    KARR AI's entrance bias gives each parking level cars x 1.5 people and the ground
+    floor the rest, so the residents arriving by car must stay below the population.
+    """
+    share = rng.uniform(0.3, 0.5)
+    weights = [rng.uniform(0.8, 1.2) for _ in range(count)]
+    if opts.get("cars_per_basement") is not None:
+        return [int(opts["cars_per_basement"])] * count
+    total = people * share / ENTRANCE_PEOPLE_PER_CAR
+    return [max(10, round(total * w / sum(weights))) for w in weights]
 
 
 # --------------------------------------------------------------------- office
@@ -257,7 +346,8 @@ _PUBLIC_USES = [
 HOTEL_ROOM_TYPES = ["King", "Twin", "Suite"]
 
 
-def _hotel_common(rng: random.Random, asset: Asset, model: str, opts: dict, rooms_for_floor) -> list[dict]:
+def _hotel_common(rng: random.Random, asset: Asset, model: str, opts: dict, plans_for) -> list[dict]:
+    """plans_for(occupied floors, people per floor) -> room mixes per guest floor, bottom up."""
     occ = _occupied(rng, asset, model, opts)
     has_amenities = bool(opts.get("has_amenities"))
     public = rng.sample(_PUBLIC_USES, k=2) if has_amenities else []
@@ -266,6 +356,7 @@ def _hotel_common(rng: random.Random, asset: Asset, model: str, opts: dict, room
     band = chart_range(asset.key, occ, opts.get("hotel_star_rating"))
     target = _people_target(rng, asset, model, occ, band, reserve=reserve if asset.key == "hotel" else 0.0)
     typical_h = _typical_h(rng, asset, opts)
+    plans = iter(reversed(plans_for(occ, target / occ)))  # top down
 
     total_levels = occ + len(public)
     public_levels = set(rng.sample(range(1, min(8, total_levels)), k=len(public))) if public else set()
@@ -283,7 +374,7 @@ def _hotel_common(rng: random.Random, asset: Asset, model: str, opts: dict, room
         else:
             floors.append({"name": str(level), "height_m": typical_h, "use": "Guest rooms",
                            "occupied": True, "boarding": False, "amenity": False,
-                           **rooms_for_floor(target / occ)})
+                           "units": dict(next(plans))})
     floors.append(dict(_ground(rng, asset, opts, "Main lobby"), amenity=False))
     for b in _basements(rng, asset, opts, (40, 90), use="Valet parking",
                         most=_basement_room(asset, model, occ, 2)):  # ground + rooftop board too
@@ -300,25 +391,19 @@ def _hotel_rooms(rng: random.Random, keys: int) -> dict[str, int]:
 
 def hotel(rng: random.Random, asset: Asset, model: str, opts: dict) -> tuple[list[dict], list[str]]:
     rate = key_occupancy(opts.get("hotel_star_rating") or "4-5", bool(opts.get("has_operator")))
-    keys = opts.get("units_per_floor")
-    floors = _hotel_common(
-        rng, asset, model, opts,
-        rooms_for_floor=lambda people: {"units": _hotel_rooms(
-            rng, int(keys) if keys is not None else max(6, round(people / rate)))},
-    )
+    floors = _hotel_common(rng, asset, model, opts, lambda occ, people: _floor_plans(
+        rng, opts, occ, people, lambda i, p: max(6, round(p / rate)), lambda i, keys: _hotel_rooms(rng, keys)))
     for f in floors:
         f.setdefault("units", {t: 0 for t in HOTEL_ROOM_TYPES})
     return floors, list(HOTEL_ROOM_TYPES)
 
 
 def hotel_apartments(rng: random.Random, asset: Asset, model: str, opts: dict) -> tuple[list[dict], list[str]]:
-    types = _unit_types(rng, opts, [["Studio", "1BR", "2BR"], ["Studio", "1BR", "2BR", "3BR"]])
+    types = _unit_types(rng, opts, [["Studio", "1BR", "2BR"], ["Studio", "1BR", "2BR", "3BR"]],
+                        HOTEL_APARTMENT_UNIT_TYPES)
     rates = unit_occupancy(asset.key, bool(opts.get("has_operator")))
-    units = opts.get("units_per_floor")
-    floors = _hotel_common(
-        rng, asset, model, opts,
-        rooms_for_floor=lambda people: {"units": _unit_plan(rng, types, rates, people, units)},
-    )
+    floors = _hotel_common(rng, asset, model, opts,
+                           lambda occ, people: _unit_plans(rng, opts, types, rates, occ, people))
     for f in floors:
         f.setdefault("units", {t: 0 for t in types})
     return floors, types

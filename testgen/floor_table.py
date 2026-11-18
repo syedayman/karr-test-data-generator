@@ -15,7 +15,7 @@ from .assets import asset_for
 
 ROW_ID = "_floor"
 _SCHEDULE_EXTRA = {
-    "residential": [],
+    "residential": [("cars", "Cars")],
     "office": [("area_m2", "Area (m²)"), ("cars", "Cars")],
     "hotel": [("area_m2", "Public area (m²)"), ("cars", "Cars")],
     "hotel_apartments": [("area_m2", "Public area (m²)"), ("cars", "Cars")],

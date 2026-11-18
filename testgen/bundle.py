@@ -12,7 +12,7 @@ from .architect_pdf import build_architect_pdf
 from .assets import asset_for
 from .excel import build_workbook
 from .simulation_pdf import build_simulation_pdf
-from .spec import derive, lift_people, passenger_served, simulation_tables
+from .spec import derive, karr_entrance_bias, lift_people, passenger_served, simulation_tables
 
 
 def _yes(v) -> str:
@@ -101,6 +101,9 @@ def _served_for_sim(spec: dict, asset, entrance_names: set[str]) -> list[dict]:
 def _entrance(spec: dict) -> list[tuple[str, float]]:
     if spec.get("entrance_bias"):
         return [(r["floor"], r["percent"]) for r in spec["entrance_bias"] if r["percent"] > 0]
+    karr = karr_entrance_bias(spec)  # the split KARR AI's Entrance Bias table prints
+    if karr:
+        return [(r["floor"], float(r["study"])) for r in karr if r["study"] > 0]
     boarding = [f for f in spec["floors"] if f.get("boarding")]
     cars = [f.get("cars") or 0 for f in boarding]
     if not sum(cars):
@@ -113,20 +116,38 @@ def _entrance(spec: dict) -> list[tuple[str, float]]:
     return rows
 
 
+ARCHITECT = "01 Architect design report.pdf"
+WORKBOOK = "02 Unit mix workbook.xlsx"
+IMAGES = "03 Images"
+LOGOS = "04 Logos"
+RENDER = f"{IMAGES}/Project render.png"
+PLAN = f"{IMAGES}/Architect plan figure.png"
+SECTION = f"{IMAGES}/Architect section figure.png"
+CLIENT_LOGO = f"{LOGOS}/Client logo.png"
+ARCHITECT_LOGO = f"{LOGOS}/Architect logo.png"
+CONSULTANT_LOGO = f"{LOGOS}/Lead consultant logo.png"
+FORM_VALUES = "00 KARR AI form values.txt"
+PROJECT_JSON = "project.json"
+
 _SIM_FILES = {
-    "Morning peak": ("10 Morning peak simulation.pdf", "AM", "Morning up-peak"),
-    "Evening peak": ("11 Evening peak simulation.pdf", "EVENING", "Evening peak"),
-    "Breaks peak": ("11 Breaks peak simulation.pdf", "BREAKS", "Breaks peak"),
-    "Guest simulation": ("10 Guest simulation.pdf", "GUEST", "Two-way"),
-    "Operator simulation": ("12 Operator simulation.pdf", "OP", "Two-way (operator criteria)"),
-    "Amenities simulation": ("13 Amenities simulation.pdf", "AMEN", "Two-way (public amenities)"),
+    "Morning peak": ("05 Morning peak simulation.pdf", "AM", "Morning up-peak"),
+    "Evening peak": ("06 Evening peak simulation.pdf", "EVENING", "Evening peak"),
+    "Breaks peak": ("06 Breaks peak simulation.pdf", "BREAKS", "Breaks peak"),
+    "Guest simulation": ("05 Guest simulation.pdf", "GUEST", "Two-way"),
+    "Operator simulation": ("07 Operator simulation.pdf", "OP", "Two-way (operator criteria)"),
+    "Amenities simulation": ("08 Amenities simulation.pdf", "AMEN", "Two-way (public amenities)"),
 }
 
 
 def simulation_file_name(spec: dict, label: str) -> str:
     if label == "Guest simulation" and asset_for(spec["asset"]).key == "car_parking":
-        return "10 Simulation.pdf"
+        return "05 Simulation.pdf"
     return _SIM_FILES[label][0]
+
+
+def top(name: str) -> str:
+    """The file, or the folder it sits in (what the tester ticks and downloads)."""
+    return name.split("/")[0]
 
 
 def simulation_pdf(spec: dict, label: str, rows: list[dict]) -> bytes:
@@ -145,12 +166,9 @@ def simulation_pdf(spec: dict, label: str, rows: list[dict]) -> bytes:
 
 
 def file_names(spec: dict) -> list[str]:
-    """Every file this project can have, in upload order."""
+    """Every file and folder this project can have, in upload order."""
     sims = [simulation_file_name(spec, label) for label, _ in simulation_tables(spec)]
-    return ["01 Architect design report.pdf", "02 Unit mix workbook.xlsx", "03 Project render.png",
-            "04 Client logo.png", "05 Architect logo.png", "06 Lead consultant logo.png",
-            "07 Architect plan figure.png", "08 Architect section figure.png", *sims,
-            "00 KARR AI form values.txt", "project.json"]
+    return [ARCHITECT, WORKBOOK, IMAGES, LOGOS, *sims, FORM_VALUES, PROJECT_JSON]
 
 
 def skipped(spec: dict) -> set[str]:
@@ -168,43 +186,55 @@ def build_files(spec: dict, render_png: bytes | None = None) -> dict[str, bytes]
     section = images.section_figure(spec, d)
     plan = images.plan_figure(spec)
     makers = {
-        "01 Architect design report.pdf": lambda: build_architect_pdf(spec, d, render, section, plan),
-        "02 Unit mix workbook.xlsx": lambda: build_workbook(spec, d["population"], skip),
-        "03 Project render.png": lambda: render,
-        "04 Client logo.png": lambda: images.logo(info["employer_client_developer"], seed + 1),
-        "05 Architect logo.png": lambda: images.logo(info["architect"], seed + 2),
-        "06 Lead consultant logo.png": lambda: images.logo(info["lead_consultant"], seed + 3),
-        "07 Architect plan figure.png": lambda: plan,
-        "08 Architect section figure.png": lambda: section,
+        ARCHITECT: lambda: build_architect_pdf(spec, d, render, section, plan),
+        WORKBOOK: lambda: build_workbook(spec, d["population"], skip),
+        RENDER: lambda: render,
+        PLAN: lambda: plan,
+        SECTION: lambda: section,
+        CLIENT_LOGO: lambda: images.logo(info["employer_client_developer"], seed + 1),
+        ARCHITECT_LOGO: lambda: images.logo(info["architect"], seed + 2),
+        CONSULTANT_LOGO: lambda: images.logo(info["lead_consultant"], seed + 3),
     }
     for label, rows in simulation_tables(spec):
         makers[simulation_file_name(spec, label)] = lambda label=label, rows=rows: simulation_pdf(spec, label, rows)
-    files = {name: make() for name, make in makers.items() if name not in skip}
-    if "00 KARR AI form values.txt" not in skip:
-        files["00 KARR AI form values.txt"] = form_values_text(spec, d, files).encode("utf-8")
-    if "project.json" not in skip:
-        files["project.json"] = json.dumps(spec, indent=2, ensure_ascii=False).encode("utf-8")
+    files = {name: make() for name, make in makers.items() if top(name) not in skip}
+    if FORM_VALUES not in skip:
+        files[FORM_VALUES] = form_values_text(spec, d, files).encode("utf-8")
+    if PROJECT_JSON not in skip:
+        files[PROJECT_JSON] = json.dumps(spec, indent=2, ensure_ascii=False).encode("utf-8")
     return files
 
 
+def folder_zip(files: dict[str, bytes], folder: str) -> bytes:
+    """One folder's files as a zip of that folder."""
+    return zip_files({name: data for name, data in files.items() if top(name) == folder})
+
+
 _UPLOAD_TARGET = {
-    "01": "Documents > Architect's design report",
-    "02": "Documents > Unit mix / schedule Excel",
-    "03": "Project information > Report images > Project render",
-    "04": "Project information > Report images > Client logo",
-    "05": "Project information > Report images > Architect logo",
-    "06": "Project information > Report images > Lead consultant logo",
-    "07": "Project information > Report images > Architect plan figure",
-    "08": "Project information > Report images > Architect section figure",
-    "10": "Building data > Traffic analysis simulation documents",
-    "11": "Building data > Traffic analysis simulation documents",
-    "12": "Building data > Operator simulation PDF",
-    "13": "Building data > Amenities simulation PDF",
+    ARCHITECT: "Documents > Architect's design report",
+    WORKBOOK: "Documents > Unit mix / schedule Excel",
+    RENDER: "Project information > Report images > Project render",
+    PLAN: "Project information > Report images > Architect plan figure",
+    SECTION: "Project information > Report images > Architect section figure",
+    CLIENT_LOGO: "Project information > Report images > Client logo",
+    ARCHITECT_LOGO: "Project information > Report images > Architect logo",
+    CONSULTANT_LOGO: "Project information > Report images > Lead consultant logo",
+}
+_SIM_TARGET = {
+    "05": "Building data > Traffic analysis simulation documents",
+    "06": "Building data > Traffic analysis simulation documents",
+    "07": "Building data > Operator simulation PDF",
+    "08": "Building data > Amenities simulation PDF",
 }
 
 
 def upload_plan(files: dict[str, bytes]) -> list[tuple[str, str]]:
-    return [(name, _UPLOAD_TARGET[name[:2]]) for name in sorted(files) if name[:2] in _UPLOAD_TARGET]
+    plan = []
+    for name in sorted(files):
+        target = _UPLOAD_TARGET.get(name) or (_SIM_TARGET.get(name[:2]) if name.endswith(".pdf") else None)
+        if target:
+            plan.append((name, target))
+    return plan
 
 
 def form_values_text(spec: dict, d: dict, files: dict[str, bytes]) -> str:

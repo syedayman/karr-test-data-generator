@@ -18,12 +18,21 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from testgen import floor_table, sim_table
-from testgen.bundle import form_values, simulation_file_name, skipped, upload_plan
+from testgen.bundle import (
+    ARCHITECT,
+    IMAGES,
+    LOGOS,
+    WORKBOOK,
+    folder_zip,
+    form_values,
+    simulation_file_name,
+    skipped,
+    top,
+    upload_plan,
+)
 from testgen.excel import workbook_sheets
 from testgen.spec import derive, simulation_tables
 
-WORKBOOK = "02 Unit mix workbook.xlsx"
-ARCHITECT = "01 Architect design report.pdf"
 STORY_TEXT = [("vision", "Design intent"), ("site", "Site and context"), ("massing", "Massing and core"),
               ("facade", "Facade"), ("amenities", "Amenities"), ("sustainability", "Sustainability")]
 Apply = Callable[[dict, bool], None]
@@ -200,7 +209,8 @@ def view_names(spec: dict, files: dict[str, bytes]) -> list[str]:
     if ARCHITECT in files:
         names.append("Architect report")
     names += [label for label, _ in simulation_tables(spec) if simulation_file_name(spec, label) in files]
-    return ["Files", *names, "Images", "Form values", "JSON"]
+    folders = ["Logos"] if any(top(n) == LOGOS for n in files) else []
+    return ["Files", *names, "Images", *folders, "Form values", "JSON"]
 
 
 def _edit_and_file(edit, file) -> None:
@@ -238,11 +248,13 @@ def show_view(name: str, cur: dict, token: int, apply: Apply, rebuild_json: Call
     elif name == "Files":
         full_table(pd.DataFrame(upload_plan(files), columns=["File", "Upload to"]))
         with st.expander("Single files"):
-            for file_name in sorted(files):
-                st.download_button(file_name, files[file_name], file_name=file_name, key=f"dl-{token}-{file_name}",
-                                   type="tertiary")
+            for item in sorted({top(n) for n in files}):
+                data, file_name = (files[item], item) if item in files else (folder_zip(files, item), f"{item}.zip")
+                st.download_button(file_name, data, file_name=file_name, key=f"dl-{token}-{item}", type="tertiary")
     elif name == "Images":
         _images(cur, token, replace_render)
+    elif name == "Logos":
+        _gallery(files, LOGOS)
     elif name == "Form values":
         sections = form_values(spec, derive(spec))
         for col, chunk in zip(st.columns(2, gap="medium"), (sections[:2], sections[2:])):
@@ -268,7 +280,11 @@ def _images(cur: dict, token: int, replace_render: Callable[[bytes], None]) -> N
         upload = st.file_uploader("Replace render", type=["png", "jpg", "jpeg"], key=f"render-{token}")
         if upload is not None and st.button("Use this render", key=f"render-go-{token}"):
             replace_render(upload.getvalue())
-    shown = [n for n in ("04 Client logo.png", "05 Architect logo.png", "06 Lead consultant logo.png",
-                         "08 Architect section figure.png", "07 Architect plan figure.png") if n in files]
-    for col, name in zip(st.columns(len(shown) or 1), shown):
-        col.image(files[name], caption=name[3:-4], width="stretch")
+    _gallery({n: d for n, d in files.items() if not n.endswith("render.png")}, IMAGES)
+
+
+def _gallery(files: dict[str, bytes], folder: str) -> None:
+    """The folder's pictures side by side, captioned with their file names."""
+    shown = [n for n in files if top(n) == folder]
+    for col, name in zip(st.columns(max(len(shown), 3)), shown):
+        col.image(files[name], caption=name.split("/")[-1][:-4], width="stretch")

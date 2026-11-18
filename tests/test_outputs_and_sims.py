@@ -7,7 +7,7 @@ import pdfplumber
 import pytest
 
 from testgen import sim_table
-from testgen.bundle import build_files, file_names
+from testgen.bundle import build_files, file_names, top
 from testgen.excel import workbook_sheets
 from testgen.spec import guest_awt, make_spec, simulation_tables, validate
 
@@ -23,14 +23,16 @@ def _text(pdf: bytes) -> str:
 
 def test_every_planned_file_is_built_unless_left_out():
     spec = make_spec("hotel", "DBC-M2", seed=4, options={"has_operator": True, "has_amenities": True})
-    assert set(build_files(spec)) == set(file_names(spec))
-    left_out = ["03 Project render.png", "12 Operator simulation.pdf", "Entrance Bias", "Operator Profile"]
+    assert {top(n) for n in build_files(spec)} == set(file_names(spec))
+    assert {n for n in build_files(spec) if top(n) == "04 Logos"} == {
+        "04 Logos/Client logo.png", "04 Logos/Architect logo.png", "04 Logos/Lead consultant logo.png"}
+    left_out = ["03 Images", "07 Operator simulation.pdf", "Entrance Bias", "Operator Profile"]
     spec = make_spec("hotel", "DBC-M2", seed=4, options={"has_operator": True, "has_amenities": True,
                                                          "skip_outputs": left_out})
     files = build_files(spec)
-    assert set(files) == set(file_names(spec)) - set(left_out)
+    assert {top(n) for n in files} == set(file_names(spec)) - set(left_out)
     assert _sheets(files) == [s for s in workbook_sheets(spec) if s not in left_out]
-    assert "12 Operator simulation.pdf" not in files["00 KARR AI form values.txt"].decode()
+    assert "07 Operator simulation.pdf" not in files["00 KARR AI form values.txt"].decode()
 
 
 def test_the_schedule_and_stacking_stay_first_in_the_workbook():
@@ -88,7 +90,7 @@ def test_edited_simulation_rows_reach_the_pdf():
     assert validate(spec) == []
     new_rows = dict(simulation_tables(spec))[label]
     assert new_rows[0]["awt"] == 99.9 and new_rows[-1]["lifts"] == 9
-    text = _text(build_files(spec)["10 Guest simulation.pdf"])
+    text = _text(build_files(spec)["05 Guest simulation.pdf"])
     assert "99.9" in text
 
 

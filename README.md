@@ -8,10 +8,9 @@ into KARR AI's setup form:
 |---|---|
 | `01 Architect design report.pdf` | Documents > Architect's design report |
 | `02 Unit mix workbook.xlsx` | Documents > Unit mix / schedule Excel (with `Lifts Stacking Mix`, and `Entrance Bias`, `Operator Profile`, `Amenities Profile`, `Amenities Stacking Mix` when needed) |
-| `03 Project render.png` | Report images > Project render (AI image, or a drawn one without a key) |
-| `04`-`06` logos | Report images > Client / Architect / Lead consultant logo |
-| `07`, `08` plan and section | Report images > Architect plan / section figure |
-| `10`-`13` simulation PDFs | Building data > simulation uploads (M2 guest sims; hotel operator / amenities sims) |
+| `03 Images/` | Report images > Project render (AI image, or a drawn one without a key), Architect plan / section figure |
+| `04 Logos/` | Report images > Client / Architect / Lead consultant logo |
+| `05`-`08` simulation PDFs | Building data > simulation uploads (M2 guest sims; hotel operator / amenities sims) |
 | `00 KARR AI form values.txt` | Every setup-form value, section by section |
 | `project.json` | The project itself: edit and upload it again to rebuild the files |
 
@@ -23,12 +22,22 @@ KARR AI).
 
 Every input starts empty and shows, in grey, the value the generator picked for the building in the
 preview. Type or choose a value to fix it (black); clear it to hand it back to the generator.
+A field KARR AI's setup page fills in by default starts on that default (no authority exception,
+one core, lifts don't serve the roof, no multipurpose lift except Schools M1, no operator / amenities,
+Independent car park, no escalators, KARR AI's capacities, hotels by star tier); the rest is random.
 
 | Group | Options |
 |---|---|
 | Building | type, method (M1 / M2) |
-| Size | occupied floors (bounded by the M1 limit), basements, typical and ground floor heights, and per type: apartment types + apartments per floor, keys per floor, office / retail area per floor, cars per level, classrooms + students per room, amenity floor, mezzanine |
+| Size | occupied floors (bounded by the M1 limit), basements, cars per basement, typical and ground floor heights, and per type: apartment types (Studio to 6BR, + Maid, Duplex) + min / max apartments per floor, penthouse floors + type, min / max keys per floor, office / retail area per floor, cars per level, classrooms + students per room, mezzanine |
 | Options | hotel stars, operator, public amenities; car park facility type, escalators (M2); retail moving walks |
+
+Where KARR AI works out the Entrance Bias table itself from the parking column (Residential, Office M2), the simulation PDFs use that same split, and the preview warns when cars x 1.5 would outnumber the people in the building.
+
+Residential people per unit follow DBC Table D.5 as KARR AI reads the column names: 4BR 5, then +1 per bedroom (5BR 6, 6BR 7), a penthouse with no bedroom count 5, duplex and maid's room +1 each.
+
+Apartment and hotel floors come in runs (more units low down), each run with its own count. With a
+min and max set, the lowest run gets the max, the highest the min, and the runs between fall inside.
 | Project details | name, location, stage, cores, lift grouping, lobby depth, lift capacities, multipurpose lift, authority exception, lifts serve roof |
 | Seed | same seed + same inputs = same project; one input changed leaves the rest as it was |
 

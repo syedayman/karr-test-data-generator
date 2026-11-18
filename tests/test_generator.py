@@ -48,7 +48,7 @@ def test_simulation_pdf_results_read_back_as_written(asset_key, model):
     files = build_files(spec)
     guest = spec["simulations"]["guest"]
     rows = guest.get("single") or guest["morning"]
-    pdf_name = next(n for n in files if n.startswith("10 "))
+    pdf_name = next(n for n in files if n.startswith("05 "))
     with pdfplumber.open(io.BytesIO(files[pdf_name])) as pdf:
         text = pdf.pages[2].extract_text()
     assert "SIMULATION RESULTS" in text
@@ -97,9 +97,9 @@ def test_operator_profile_states_a_default_occupancy(asset_key):
 def test_hotel_sidecars_follow_the_toggles():
     spec = make_spec("hotel", "DBC-M1", seed=4, options={"has_operator": True, "has_amenities": False})
     files = build_files(spec)
-    assert "12 Operator simulation.pdf" in files
-    assert "13 Amenities simulation.pdf" not in files
-    assert not any(n.startswith("10 ") for n in files)  # M1: no guest simulation
+    assert "07 Operator simulation.pdf" in files
+    assert "08 Amenities simulation.pdf" not in files
+    assert not any(n.startswith(("05 ", "06 ")) for n in files)  # M1: no guest simulation
 
 
 def test_json_round_trip_rebuilds_the_same_workbook():

@@ -11,12 +11,14 @@ from __future__ import annotations
 
 import math
 import random
+import re
 from datetime import date
 
 from . import fallback_story
 from .assets import (
     ASSETS,
     CAR_OCCUPANCY,
+    ENTRANCE_PEOPLE_PER_CAR,
     ESCALATOR_SPLIT,
     HOTEL_STAR_AWT,
     HOTEL_STARS,
@@ -24,10 +26,12 @@ from .assets import (
     MRL_SPEEDS,
     OPERATOR_RATES_APARTMENTS,
     OPERATOR_RATES_HOTEL,
+    PENTHOUSE_TYPES,
     TROLLEY_USE_RE,
     VALID_SPEEDS,
     Asset,
     asset_for,
+    default_capacities,
     height_category,
     key_occupancy,
     unit_occupancy,
@@ -319,11 +323,19 @@ def check_options(asset: Asset, model: str, opts: dict) -> None:
     cores = opts.get("core_count")
     if cores is not None and not 1 <= int(cores) <= 5:
         raise ValueError("KARR AI takes 1-5 cores.")
+    lo, hi = opts.get("units_per_floor_min"), opts.get("units_per_floor_max")
+    if lo is not None and hi is not None and int(lo) > int(hi):
+        raise ValueError(f"Min per floor ({lo}) is above max ({hi}).")
 
 
 def make_spec(asset_key: str, model: str, seed: int | None = None,
               options: dict | None = None, story: dict | None = None) -> dict:
-    """Invent a project. `options` (see floors.py and README) fix any value; the rest is random."""
+    """Invent a project. `options` (see floors.py and README) fix any value.
+
+    A setup-page field KARR AI fills in by default (no authority exception, one core,
+    no operator / amenities, Independent car park, no escalators, capacities) gets
+    that default; the rest is random.
+    """
     asset = ASSETS[asset_key]
     opts = {k: v for k, v in (options or {}).items()
             if v is not None and v != "" and (v != [] or k == "skip_outputs")}
@@ -336,13 +348,11 @@ def make_spec(asset_key: str, model: str, seed: int | None = None,
     if asset.key == "hotel":
         opts["hotel_star_rating"] = choose(opts, "hotel_star_rating", rng.choice(HOTEL_STARS))
     if asset.hotel_like:
-        opts["has_operator"] = choose(opts, "has_operator", rng.random() < 0.5)
-        opts["has_amenities"] = choose(opts, "has_amenities", rng.random() < 0.5)
+        opts["has_operator"] = choose(opts, "has_operator", False)
+        opts["has_amenities"] = choose(opts, "has_amenities", False)
     if asset.key == "car_parking":
-        opts["car_parking_facility_type"] = choose(opts, "car_parking_facility_type",
-                                                   rng.choice(["Independent", "Retail/Mall Attached"]))
-        opts["car_parking_has_escalators"] = choose(opts, "car_parking_has_escalators",
-                                                    model == "DBC-M2" and rng.random() < 0.5)
+        opts["car_parking_facility_type"] = choose(opts, "car_parking_facility_type", "Independent")
+        opts["car_parking_has_escalators"] = choose(opts, "car_parking_has_escalators", False)
 
     floors, unit_types = build_floors(asset, model, rng, opts)
     today = date.today()
@@ -369,8 +379,7 @@ def make_spec(asset_key: str, model: str, seed: int | None = None,
         project_info["car_parking_facility_type"] = opts["car_parking_facility_type"]
         project_info["car_parking_has_escalators"] = bool(opts["car_parking_has_escalators"])
 
-    auto_cores = rng.choice([1, 1, 1, 2]) if asset.key in ("residential", "office") else 1
-    exceptions = rng.random() < 0.25
+    passenger_kg, fire_kg = default_capacities(asset, opts.get("hotel_star_rating"))
     spec = {
         "spec_version": SPEC_VERSION,
         "seed": seed,
@@ -378,18 +387,18 @@ def make_spec(asset_key: str, model: str, seed: int | None = None,
         "model": model,
         "options": chosen,
         "project_info": project_info,
-        "building": {"has_authority_exceptions": bool(choose(opts, "authority_exceptions", exceptions))},
+        "building": {"has_authority_exceptions": bool(choose(opts, "authority_exceptions", False))},
         "vt_criteria": {
             "elevator_grouping": choose(opts, "elevator_grouping", rng.choice(GROUPINGS)),
             "lobby_depth_m": float(choose(opts, "lobby_depth_m", rng.choice(LOBBY_DEPTHS_M))),
-            "core_count": int(choose(opts, "core_count", auto_cores)),
+            "core_count": int(choose(opts, "core_count", 1)),
             "serves_roof": bool(opts.get("serves_roof", False)),
             "multipurpose_elevator": bool(choose(opts, "multipurpose_elevator",
                                                  asset.key == "schools" and model == "DBC-M1")),
             "usable_area_below_pit": False,
         },
-        "space_planning": {"passenger_capacity_kg": int(choose(opts, "passenger_capacity_kg", asset.passenger_kg)),
-                           "fire_service_capacity_kg": int(choose(opts, "fire_service_capacity_kg", asset.fire_kg))},
+        "space_planning": {"passenger_capacity_kg": int(choose(opts, "passenger_capacity_kg", passenger_kg)),
+                           "fire_service_capacity_kg": int(choose(opts, "fire_service_capacity_kg", fire_kg))},
         "unit_types": unit_types,
         "floors": floors,
         "operator_profile": None,
@@ -506,13 +515,18 @@ def resolved_options(spec: dict) -> dict:
         "passenger_capacity_kg": sp.get("passenger_capacity_kg"),
         "fire_service_capacity_kg": sp.get("fire_service_capacity_kg"),
     }
+    penthouses = [f for f in occupied if f.get("use") == "Penthouse"]
     if asset.key in ("residential", "hotel_apartments", "hotel"):
-        out["units_per_floor"] = _span([sum(f["units"].values()) for f in occupied])
+        counts = [sum(f["units"].values()) for f in occupied if f not in penthouses]
+        out["units_per_floor_min"], out["units_per_floor_max"] = min(counts), max(counts)
     if asset.key in ("residential", "hotel_apartments"):
-        out["unit_types"] = list(spec.get("unit_types") or [])
+        out["unit_types"] = [t for t in spec.get("unit_types") or [] if t not in PENTHOUSE_TYPES]
     if asset.key == "residential":
-        out["amenity_floor"] = any(not f.get("occupied") and "amenities" in str(f["use"]).lower()
-                                   for f in floors[:g])
+        out["penthouse_floors"] = len(penthouses)
+        if penthouses:
+            out["penthouse_type"] = next(iter(penthouses[0]["units"]))
+    if asset.key != "car_parking" and floors[g + 1:]:
+        out["cars_per_basement"] = _span([f.get("cars") for f in floors[g + 1:]])
     if asset.key == "office":
         out["floor_area_m2"] = _span([f.get("area_m2") for f in occupied])
         out["mezzanine"] = any(f["name"] == "M" for f in floors)
@@ -632,6 +646,74 @@ def car_park_sim_speed(spec: dict) -> float:
     """The one speed KARR AI accepts from a Car Parking M2 simulation (its M1 speed)."""
     raw = derive(spec)["passenger_travel_m"] / asset_for(spec["asset"]).speed_divisor
     return next((s for s in VALID_SPEEDS if s >= raw - 1e-9), VALID_SPEEDS[-1])
+
+
+def _largest_remainder(percentages: list[float]) -> list[int]:
+    """Whole percentages summing to 100, as KARR AI rounds them (negatives count as 0)."""
+    cleaned = [max(0.0, p) for p in percentages]
+    total = sum(cleaned)
+    if total <= 0:
+        return [0] * len(cleaned)
+    if abs(total - 100.0) > 1e-9:
+        cleaned = [p / total * 100.0 for p in cleaned]
+    whole = [int(p) for p in cleaned]
+    order = sorted(range(len(cleaned)), key=lambda i: cleaned[i] - whole[i], reverse=True)
+    for i in order[:100 - sum(whole)]:
+        whole[i] += 1
+    return whole
+
+
+def _entrance_population(spec: dict) -> int | None:
+    """The population KARR AI divides by in the Entrance Bias table its report prints, else None.
+
+    Residential (M1 and M2): the building population. Office M2: round(GA x 0.08) per office
+    floor. Hotels, Hotel Apartments and Car Parking take the uploaded sheet instead; the other
+    reports print no Entrance Bias table.
+    """
+    key = asset_for(spec["asset"]).key
+    if key == "residential":
+        return derive(spec)["population"]
+    if key == "office" and spec["model"] == "DBC-M2":
+        return sum(round(f["area_m2"] * 0.08) for f in spec["floors"]
+                   if f.get("occupied") and f.get("area_m2") and re.search(r"offic|amenit", str(f["use"]).lower()))
+    return None
+
+
+def karr_entrance_bias(spec: dict) -> list[dict]:
+    """KARR AI's own Entrance Bias table where its report prints one (see `_entrance_population`), else [].
+
+    Ground and every parking level, top down. A parking level gets cars x 1.5 people as a
+    share of the population; the ground floor takes the rest (negative when the cars bring
+    more people than the building holds); the traffic-study column rounds to whole percent.
+    """
+    population = _entrance_population(spec)
+    if population is None:
+        return []
+    floors = spec["floors"]
+    g = ground_index(floors)
+    levels = [f for i, f in enumerate(floors)
+              if (f.get("cars") or 0) > 0 or i == g or (i > g and "park" in str(f["use"]).lower())]
+    rows = []
+    for f in levels:
+        people = round((f.get("cars") or 0) * ENTRANCE_PEOPLE_PER_CAR)
+        rows.append({"floor": f["name"], "cars": f.get("cars") or 0, "people": people, "ground": f is floors[g],
+                     "percent": 0.0 if f is floors[g] else (people / population * 100 if population else 0.0)})
+    ground_share = 100.0 - sum(r["percent"] for r in rows if not r["ground"])
+    for r in rows:
+        if r["ground"]:
+            r["percent"] = ground_share
+    for r, whole in zip(rows, _largest_remainder([r["percent"] for r in rows])):
+        r["study"] = whole
+    return rows
+
+
+def entrance_problems(spec: dict) -> list[str]:
+    """Why KARR AI's Entrance Bias table would look wrong (empty = fine)."""
+    ground = next((r for r in karr_entrance_bias(spec) if r["ground"]), None)
+    if ground and ground["percent"] < 0:
+        return [f"cars x 1.5 is more people than the building holds, so KARR AI gives the ground floor "
+                f"{ground['percent']:.0f}% in Entrance Bias"]
+    return []
 
 
 def simulation_problems(spec: dict) -> list[str]:
