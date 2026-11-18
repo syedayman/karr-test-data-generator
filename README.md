@@ -29,7 +29,7 @@ Independent car park, no escalators, KARR AI's capacities, hotels by star tier);
 | Group | Options |
 |---|---|
 | Building | type, method (M1 / M2) |
-| Size | occupied floors (bounded by the M1 limit), basements, cars per basement, typical and ground floor heights, and per type: apartment types (Studio to 6BR, + Maid, Duplex) + min / max apartments per floor, penthouse floors + type, min / max keys per floor, office / retail area per floor, cars per level, classrooms + students per room, mezzanine |
+| Size | occupied floors (bounded by the M1 limit), basements, cars per basement, typical and ground floor heights, and per type: apartment types (Studio to 6BR, + Maid, Duplex; a penthouse type goes on the top floors) + min / max apartments per floor, min / max keys per floor, office / retail area per floor, cars per level, classrooms + students per room, mezzanine |
 | Options | hotel stars, operator, public amenities; car park facility type, escalators (M2); retail moving walks |
 
 Where KARR AI works out the Entrance Bias table itself from the parking column (Residential, Office M2), the simulation PDFs use that same split, and the preview warns when cars x 1.5 would outnumber the people in the building.

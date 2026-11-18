@@ -184,7 +184,7 @@ def size_fields(asset, model: str) -> list[list[Field]]:
     first += [Field("typical_floor_height_m", "Typical floor height (m)", "float", 2.5, 9.0, 0.05),
               Field("ground_floor_height_m", "Ground floor height (m)", "float", 2.5, 10.0, 0.05)]
     unit_types = Field("unit_types", "Unit types", "multi", span=2, choices=tuple(
-        RESIDENTIAL_UNIT_TYPES if asset.key == "residential" else HOTEL_APARTMENT_UNIT_TYPES))
+        RESIDENTIAL_UNIT_TYPES + PENTHOUSE_TYPES if asset.key == "residential" else HOTEL_APARTMENT_UNIT_TYPES))
     units = [Field("units_per_floor_min", "Min units per floor", "int", 1, 80),
              Field("units_per_floor_max", "Max units per floor", "int", 1, 80)]
     rooms = "Lecture rooms" if asset.key == "universities" else "Classrooms"
@@ -209,9 +209,6 @@ def size_fields(asset, model: str) -> list[list[Field]]:
 
 def option_fields(asset, model: str) -> list[list[Field]]:
     row = []
-    if asset.key == "residential":
-        row += [Field("penthouse_floors", "Penthouse floors", "int", 0, 4),
-                Field("penthouse_type", "Penthouse type", "choice", choices=tuple(PENTHOUSE_TYPES))]
     if asset.key == "hotel":
         row.append(Field("hotel_star_rating", "Stars", "choice", choices=tuple(HOTEL_STARS)))
     if asset.hotel_like:

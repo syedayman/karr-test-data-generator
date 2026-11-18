@@ -26,7 +26,6 @@ from .assets import (
     MRL_SPEEDS,
     OPERATOR_RATES_APARTMENTS,
     OPERATOR_RATES_HOTEL,
-    PENTHOUSE_TYPES,
     TROLLEY_USE_RE,
     VALID_SPEEDS,
     Asset,
@@ -520,11 +519,7 @@ def resolved_options(spec: dict) -> dict:
         counts = [sum(f["units"].values()) for f in occupied if f not in penthouses]
         out["units_per_floor_min"], out["units_per_floor_max"] = min(counts), max(counts)
     if asset.key in ("residential", "hotel_apartments"):
-        out["unit_types"] = [t for t in spec.get("unit_types") or [] if t not in PENTHOUSE_TYPES]
-    if asset.key == "residential":
-        out["penthouse_floors"] = len(penthouses)
-        if penthouses:
-            out["penthouse_type"] = next(iter(penthouses[0]["units"]))
+        out["unit_types"] = list(spec.get("unit_types") or [])
     if asset.key != "car_parking" and floors[g + 1:]:
         out["cars_per_basement"] = _span([f.get("cars") for f in floors[g + 1:]])
     if asset.key == "office":

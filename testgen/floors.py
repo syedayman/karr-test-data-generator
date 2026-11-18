@@ -15,9 +15,8 @@ Options (all optional; a missing option is picked at random from `SIZING`):
     occupied_floors          floors KARR AI counts as occupied (Y in Lifts Stacking Mix)
     basements                parking basements below ground
     typical_floor_height_m, ground_floor_height_m
-    unit_types               residential / hotel apartments, e.g. ["Studio", "1BR"] (typical floors)
-    penthouse_floors, penthouse_type
-                             residential: top floors with a few penthouses of one type
+    unit_types               residential / hotel apartments, e.g. ["Studio", "1BR"]; a residential
+                             penthouse type goes on the top floor(s), a few units each
     cars_per_basement        parking spaces on each basement (every type with basements)
     units_per_floor_min, units_per_floor_max
                              residential / hotel apartment units, hotel keys; the floors come in
@@ -249,13 +248,20 @@ def _unit_types(rng: random.Random, opts: dict, choices: list[list[str]], allowe
     return picked or auto
 
 
-def _penthouses(rng: random.Random, opts: dict, occ: int) -> tuple[str, list[int]]:
-    """(type, units on each penthouse floor top down); always draws, so other picks stay put."""
+def _penthouses(rng: random.Random, opts: dict, occ: int) -> list[tuple[str, int]]:
+    """(type, units) per penthouse floor, top down; always draws, so other picks stay put.
+
+    Penthouse types the tester picked in unit_types get the top floor(s), one type per floor;
+    picked types without one mean no penthouses; no pick leaves it to chance.
+    """
     auto_floors = rng.choice([0, 0, 1, 1, 2])
-    kind = choose(opts, "penthouse_type", rng.choice(PENTHOUSE_TYPES))
+    auto_kind = rng.choice(PENTHOUSE_TYPES)
     units = [rng.randint(1, 4) for _ in range(4)]
-    floors = min(int(choose(opts, "penthouse_floors", auto_floors)), occ - 1)
-    return kind, units[:max(0, floors)]
+    picked = opts.get("unit_types") or []
+    kinds = [t for t in PENTHOUSE_TYPES if t in picked] if picked else [auto_kind]
+    floors = 0 if not kinds else max(auto_floors, len(kinds)) if picked else auto_floors
+    floors = max(0, min(floors, occ - 1))
+    return [(kinds[i % len(kinds)], units[i]) for i in range(floors)]
 
 
 def residential(rng: random.Random, asset: Asset, model: str, opts: dict) -> tuple[list[dict], list[str]]:
@@ -264,20 +270,19 @@ def residential(rng: random.Random, asset: Asset, model: str, opts: dict) -> tup
     rates = unit_occupancy(asset.key)
     typical_h = _typical_h(rng, asset, opts)
     target = _people_target(rng, asset, model, occ, chart_range(asset.key, occ))
-    ph_type, ph_units = _penthouses(rng, opts, occ)
-    typical = occ - len(ph_units)
-    per_floor = max(target - rates[ph_type] * sum(ph_units), typical * 4) / typical
+    penthouses = _penthouses(rng, opts, occ)
+    typical = occ - len(penthouses)
+    per_floor = max(target - sum(rates[t] * n for t, n in penthouses), typical * 4) / typical
     plans = _unit_plans(rng, opts, types, rates, typical, per_floor)  # bottom up
 
     floors: list[dict] = [_roof(rng)]
-    for level, units in zip(range(occ, typical, -1), ph_units):
+    for level, (kind, units) in zip(range(occ, typical, -1), penthouses):
         floors.append({"name": str(level), "height_m": typical_h, "use": "Penthouse",
-                       "units": {ph_type: units}, "occupied": True, "boarding": False})
+                       "units": {kind: units}, "occupied": True, "boarding": False})
     for level in range(typical, 0, -1):
         floors.append({"name": str(level), "height_m": typical_h, "use": "Residential",
                        "units": dict(plans[level - 1]), "occupied": True, "boarding": False})
-    if ph_units:
-        types = [*types, ph_type]
+    types = types + [t for t in PENTHOUSE_TYPES if any(t == k for k, _ in penthouses)]
 
     floors.append(_ground(rng, asset, opts, "Main entrance lobby, retail"))
     basements = _basements(rng, asset, opts, (60, 160), most=_basement_room(asset, model, occ, 1))

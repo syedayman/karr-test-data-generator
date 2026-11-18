@@ -55,7 +55,7 @@ def test_a_floor_count_on_the_wrong_side_of_the_m1_limit_is_refused(asset_key, m
 def test_size_options_are_honoured():
     spec = make_spec("residential", "DBC-M1", seed=3, options={
         "occupied_floors": 12, "basements": 2, "typical_floor_height_m": 3.25, "ground_floor_height_m": 5.5,
-        "unit_types": ["Studio", "2BR"], "units_per_floor_min": 9, "units_per_floor_max": 9, "penthouse_floors": 0})
+        "unit_types": ["Studio", "2BR"], "units_per_floor_min": 9, "units_per_floor_max": 9})
     assert spec["unit_types"] == ["Studio", "2BR"]
     assert all(sum(f["units"].values()) == 9 and f["height_m"] == 3.25 for f in _occupied(spec))
     assert [f["name"] for f in spec["floors"] if f.get("cars")] == ["B1", "B2"]
