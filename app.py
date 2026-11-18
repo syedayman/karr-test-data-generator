@@ -50,7 +50,7 @@ st.set_page_config(page_title="KARR AI Test Data", layout="wide")
 
 st.html("""
 <style>
-[data-testid="stMainBlockContainer"] {padding-top: 2.2rem; max-width: 1280px;}
+[data-testid="stMainBlockContainer"] {padding-top: 4rem; max-width: 1280px;}
 [data-testid="stNumberInputStepDown"], [data-testid="stNumberInputStepUp"] {display: none;}
 .st-key-view [data-testid="stButtonGroup"] > div {flex-wrap: wrap; overflow: visible; row-gap: 8px;}
 h3 {font-weight: 600; letter-spacing: -0.01em;}
@@ -97,11 +97,13 @@ if password and not st.session_state.get("authed"):
     _, mid, _ = st.columns([1, 1, 1])
     with mid:
         st.markdown("### KARR AI Test Data")
-        entered = st.text_input("Password", type="password")
-        if entered == password:
+        with st.form("gate", border=False):
+            entered = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Enter", type="primary", width="stretch")
+        if submitted and entered == password:
             st.session_state.authed = True
             st.rerun()
-        elif entered:
+        elif submitted:
             st.error("Wrong password")
     st.stop()
 
