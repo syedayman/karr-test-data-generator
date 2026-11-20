@@ -99,3 +99,19 @@ def test_too_many_simulation_rows_are_reported():
     label, rows = simulation_tables(spec)[0]
     sim_table.set_rows(spec, label, rows * 10)
     assert any("at most" in e for e in validate(spec))
+
+
+def test_a_batch_zip_has_a_folder_per_project_and_every_project_in_projects_json():
+    import json
+    import zipfile
+
+    from testgen.bundle import batch_zip
+
+    specs = [make_spec("residential", "DBC-M1", seed=1), make_spec("hotel", "DBC-M2", seed=2)]
+    with zipfile.ZipFile(io.BytesIO(batch_zip([(s, None) for s in specs]))) as z:
+        names = z.namelist()
+        listed = json.loads(z.read("projects.json"))
+    folders = sorted({n.split("/")[0] for n in names if "/" in n})
+    assert [f[:3] for f in folders] == ["01 ", "02 "]
+    assert all(f"{folder}/project.json" in names for folder in folders)
+    assert listed == specs

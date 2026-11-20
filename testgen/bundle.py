@@ -128,6 +128,7 @@ ARCHITECT_LOGO = f"{LOGOS}/Architect logo.png"
 CONSULTANT_LOGO = f"{LOGOS}/Lead consultant logo.png"
 FORM_VALUES = "00 KARR AI form values.txt"
 PROJECT_JSON = "project.json"
+PROJECTS_JSON = "projects.json"  # a batch: every project.json in one list
 
 _SIM_FILES = {
     "Morning peak": ("05 Morning peak simulation.pdf", "AM", "Morning up-peak"),
@@ -255,6 +256,33 @@ def zip_name(spec: dict) -> str:
     safe = re.sub(r"[^A-Za-z0-9 ._-]+", "", spec["project_info"]["project_name"]).strip()
     asset = asset_for(spec["asset"]).key.replace("_", " ")
     return f"{safe} - {asset} {spec['model'][-2:]}.zip"
+
+
+def batch_folder(i: int, spec: dict) -> str:
+    """The folder of the i-th project (from 1) in a batch zip."""
+    return f"{i:02d} {zip_name(spec)[:-4]}"
+
+
+def write_batch(out, projects) -> None:
+    """A batch zip written into the file `out`: each project's files in its own
+    numbered folder, and every project.json in one projects.json.
+
+    `projects` gives (spec, render) pairs (render None for the drawn one); they are
+    built one at a time, so a long batch never holds every file at once.
+    """
+    specs = []
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, (spec, render) in enumerate(projects, start=1):
+            for name, data in build_files(spec, render).items():
+                z.writestr(f"{batch_folder(i, spec)}/{name}", data)
+            specs.append(spec)
+        z.writestr(PROJECTS_JSON, json.dumps(specs, indent=2, ensure_ascii=False).encode("utf-8"))
+
+
+def batch_zip(projects) -> bytes:
+    buf = io.BytesIO()
+    write_batch(buf, projects)
+    return buf.getvalue()
 
 
 def zip_files(files: dict[str, bytes], folder: str = "") -> bytes:

@@ -1,23 +1,21 @@
 """Result views for the app: one per sheet or file, with an editor and the file as built.
 
-Each editor changes the project spec and hands it to `apply(spec, recompute)`;
-the app checks it, rebuilds every file and reruns. `recompute` regenerates what
-follows from the floors (travel, preliminary lifts, entrance bias, simulations).
+The views and editors are defined in `testgen.edits`. An editor's Apply hands the
+changed spec to `apply(spec, recompute)`; the app checks it, rebuilds every file
+and reruns. `recompute` regenerates what follows from the floors (travel,
+preliminary lifts, entrance bias, simulations).
 """
 
 from __future__ import annotations
 
-import copy
 import io
 from collections.abc import Callable
 from html import escape
 
 import pandas as pd
 import streamlit as st
-from openpyxl import load_workbook
-from openpyxl.utils import get_column_letter
 
-from testgen import floor_table, sim_table
+from testgen import edits
 from testgen.bundle import (
     ARCHITECT,
     IMAGES,
@@ -26,15 +24,12 @@ from testgen.bundle import (
     folder_zip,
     form_values,
     simulation_file_name,
-    skipped,
     top,
     upload_plan,
 )
 from testgen.excel import workbook_sheets
 from testgen.spec import derive, simulation_tables
 
-STORY_TEXT = [("vision", "Design intent"), ("site", "Site and context"), ("massing", "Massing and core"),
-              ("facade", "Facade"), ("amenities", "Amenities"), ("sustainability", "Sustainability")]
 Apply = Callable[[dict, bool], None]
 
 
@@ -72,11 +67,9 @@ def show_pdf(data: bytes) -> None:
 
 @st.cache_data(max_entries=32, show_spinner=False)
 def sheet_grid(data: bytes, sheet: str) -> pd.DataFrame:
-    ws = load_workbook(io.BytesIO(data), data_only=True)[sheet]
-    rows = [["" if v is None else str(v) for v in row] for row in ws.iter_rows(values_only=True)]
+    rows = edits.sheet_grid(data, sheet)
     width = max((len(r) for r in rows), default=0)
-    return pd.DataFrame(rows, columns=[get_column_letter(i + 1) for i in range(width)],
-                        index=range(1, len(rows) + 1))
+    return pd.DataFrame(rows, columns=edits.column_letters(width), index=range(1, len(rows) + 1))
 
 
 def show_sheet(data: bytes, sheet: str) -> None:
@@ -86,132 +79,63 @@ def show_sheet(data: bytes, sheet: str) -> None:
 
 # ------------------------------------------------------------------ editors
 
-def _number_config(label: str, whole: bool):
-    return st.column_config.NumberColumn(label, min_value=0, step=1 if whole else 0.01,
-                                         format="%d" if whole else "%.2f")
+def _column_config(c: dict):
+    """A Streamlit column for one of the editor's columns (None hides it)."""
+    if c["hidden"]:
+        return None
+    if c["kind"] == "tick":
+        return st.column_config.CheckboxColumn(c["name"], default=False)
+    if c["kind"] == "text":
+        width = "small" if c["narrow"] else "large" if c["wide"] else None
+        return st.column_config.TextColumn(c["name"], required=c["required"] or None, width=width)
+    whole = c["kind"] == "whole"
+    return st.column_config.NumberColumn(c["name"], min_value=c["lo"], max_value=c["hi"],
+                                         step=c["step"] or (1 if whole else 0.01), format="%d" if whole else "%.2f")
 
 
-def _floor_editor(cur: dict, key: str, columns_of, apply: Apply, add_rows: bool) -> None:
+def _field_widget(col, c: dict, key: str):
+    name, value = c["name"], c["value"]
+    if c["kind"] == "long":
+        return col.text_area(name, value, height=110, key=key)
+    if c["kind"] == "number":
+        return col.number_input(name, c["lo"], c["hi"], float(value), c["step"], key=key)
+    if c["kind"] == "whole":
+        return col.number_input(name, int(c["lo"]), int(c["hi"]), int(value), int(c["step"]), key=key)
+    return col.text_input(name, value, key=key)
+
+
+def _editor(cur: dict, view: str, key: str, apply: Apply) -> None:
+    """The view's fields and table, and Apply."""
     spec = cur["spec"]
-    columns = columns_of(spec)
-    config: dict = {floor_table.ROW_ID: None}
-    for field, label in columns:
-        if field in floor_table.FLAGS:
-            config[label] = st.column_config.CheckboxColumn(label, default=False)
-        elif field == "name":
-            config[label] = st.column_config.TextColumn(label, required=True, width="small")
-        elif field == "use":
-            config[label] = st.column_config.TextColumn(label, width="large")
-        elif field == "height_m":
-            config[label] = st.column_config.NumberColumn(label, min_value=0.0, max_value=20.0, step=0.05,
-                                                          format="%.2f")
-        else:
-            config[label] = _number_config(label, True)
-    edited = st.data_editor(pd.DataFrame(floor_table.to_rows(spec, columns)), hide_index=True,
-                            num_rows="dynamic" if add_rows else "fixed", column_config=config, key=key,
-                            disabled=[] if add_rows else ["Floor"], width="stretch",
-                            height=table_height(len(spec["floors"]), add_rows))
+    shape = edits.editor(spec, view)
+    fields = {}
+    for row in shape["fields"]:
+        for col, c in zip(st.columns(len(row)), row):
+            fields[c["name"]] = _field_widget(col, c, f"{key}-{c['name']}")
+    rows = []
+    table = shape["table"]
+    if table:
+        columns = table["columns"]
+        edited = st.data_editor(
+            pd.DataFrame(table["rows"], columns=[c["name"] for c in columns]), hide_index=True,
+            num_rows="dynamic" if table["add_rows"] else "fixed",
+            column_config={c["name"]: _column_config(c) for c in columns}, key=f"{key}-rows",
+            disabled=[c["name"] for c in columns if c["locked"]], width="stretch",
+            height=table_height(len(table["rows"]), table["add_rows"]))
+        if table["total_percent"]:
+            total = edited[table["total_percent"]].fillna(0).sum()
+            st.html(f'<div class="tg-status">Total {total:.1f}%</div>')
+        rows = edited.to_dict("records")
     if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        new["floors"] = floor_table.from_rows(spec, edited.to_dict("records"), columns)
-        apply(new, True)
-
-
-def _entrance_editor(cur: dict, key: str, apply: Apply) -> None:
-    spec = cur["spec"]
-    df = pd.DataFrame([{"Floor": r["floor"], "Parking": r.get("parking", 0), "Entrance bias (%)": r["percent"]}
-                       for r in spec["entrance_bias"]])
-    edited = st.data_editor(df, hide_index=True, num_rows="dynamic", key=key, width="stretch", column_config={
-        "Floor": st.column_config.TextColumn("Floor", required=True),
-        "Parking": _number_config("Parking", True),
-        "Entrance bias (%)": _number_config("Entrance bias (%)", False)})
-    st.html(f'<div class="tg-status">Total {edited["Entrance bias (%)"].fillna(0).sum():.1f}%</div>')
-    if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        new["entrance_bias"] = [
-            {"floor": str(r["Floor"]).strip(), "parking": int(r["Parking"] or 0),
-             "percent": round(float(r["Entrance bias (%)"] or 0), 2)}
-            for r in edited.fillna({"Parking": 0, "Entrance bias (%)": 0}).to_dict("records")
-            if str(r["Floor"] or "").strip() and str(r["Floor"]) != "nan"]
-        apply(new, False)
-
-
-def _profile_editor(cur: dict, key: str, field: str, apply: Apply) -> None:
-    spec = cur["spec"]
-    p = spec[field]
-    c1, c2 = st.columns(2)
-    title = c1.text_input("Title", p["title"], key=f"{key}-title")
-    guide = c2.text_input("Design guide", p["design_guide"], key=f"{key}-guide")
-    c1, c2, c3, c4 = st.columns(4)
-    occupancy = c1.text_input("Building occupancy", p["building_occupancy"], key=f"{key}-occ")
-    loading = c2.number_input("Cabin loading factor", 0.0, 1.0, float(p["cabin_loading_factor"]), 0.05,
-                              key=f"{key}-load")
-    handling = c3.number_input("Handling capacity", 0.0, 1.0, float(p["handling_capacity"]), 0.01,
-                               key=f"{key}-hc")
-    awt = c4.number_input("Waiting time (s)", 1, 300, int(p["awt_s"]), 1, key=f"{key}-awt")
-    rates = st.data_editor(pd.DataFrame([{"Type": k, "Occupancy rate": v} for k, v in p["occupancy_rates"].items()]),
-                           hide_index=True, num_rows="dynamic", key=f"{key}-rates", width="stretch",
-                           column_config={"Occupancy rate": _number_config("Occupancy rate", False)})
-    if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        new[field] = dict(p, title=title, design_guide=guide, building_occupancy=occupancy,
-                          cabin_loading_factor=loading, handling_capacity=handling, awt_s=int(awt),
-                          occupancy_rates={str(r["Type"]).strip(): float(r["Occupancy rate"] or 0)
-                                           for r in rates.to_dict("records")
-                                           if str(r["Type"] or "").strip() and str(r["Type"]) != "nan"})
-        apply(new, False)
-
-
-def _occupancy_editor(cur: dict, key: str, apply: Apply) -> None:
-    spec = cur["spec"]
-    df = pd.DataFrame([{"Area": r["area"], "m² per person": r["m2_per_person"]}
-                       for r in spec["public_area_occupancy"]])
-    edited = st.data_editor(df, hide_index=True, num_rows="dynamic", key=key, width="stretch",
-                            column_config={"m² per person": _number_config("m² per person", False)})
-    if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        new["public_area_occupancy"] = [
-            {"area": str(r["Area"]).strip(), "m2_per_person": float(r["m² per person"] or 0)}
-            for r in edited.to_dict("records") if str(r["Area"] or "").strip() and str(r["Area"]) != "nan"]
-        apply(new, False)
-
-
-def _story_editor(cur: dict, key: str, apply: Apply) -> None:
-    spec = cur["spec"]
-    texts = {}
-    for field, label in STORY_TEXT:
-        texts[field] = st.text_area(label, spec["story"].get(field, ""), height=110, key=f"{key}-{field}")
-    if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        new["story"].update(texts)
-        apply(new, False)
-
-
-def _simulation_editor(cur: dict, key: str, label: str, rows: list[dict], apply: Apply) -> None:
-    spec = cur["spec"]
-    config = {lab: _number_config(lab, whole) if k in sim_table.REPORTED else None
-              for k, lab, whole in sim_table.COLUMNS}
-    edited = st.data_editor(pd.DataFrame(sim_table.to_table(rows)), hide_index=True, num_rows="dynamic",
-                            column_config=config, key=f"{key}-rows", width="stretch",
-                            height=table_height(len(rows), True))
-    if st.button("Apply", type="primary", key=f"{key}-go"):
-        new = copy.deepcopy(spec)
-        sim_table.set_rows(new, label, sim_table.from_table(edited.to_dict("records")))
-        apply(new, False)
+        try:
+            new, recompute = edits.change(spec, view, fields, rows)
+        except (ValueError, TypeError) as e:
+            st.error(str(e))
+            return
+        apply(new, recompute)
 
 
 # -------------------------------------------------------------------- views
-
-def view_names(spec: dict, files: dict[str, bytes]) -> list[str]:
-    names = []
-    if WORKBOOK in files:
-        names += [s for s in workbook_sheets(spec) if s not in skipped(spec)]
-    if ARCHITECT in files:
-        names.append("Architect report")
-    names += [label for label, _ in simulation_tables(spec) if simulation_file_name(spec, label) in files]
-    folders = ["Logos"] if any(top(n) == LOGOS for n in files) else []
-    return ["Files", *names, "Images", *folders, "Form values", "JSON"]
-
 
 def _edit_and_file(edit, file) -> None:
     edit_tab, file_tab = st.tabs(["Edit", "File"])
@@ -221,30 +145,21 @@ def _edit_and_file(edit, file) -> None:
         file()
 
 
-def show_view(name: str, cur: dict, token: int, apply: Apply, rebuild_json: Callable[[str], None],
-              replace_render: Callable[[bytes], None]) -> None:
+def show_view(name: str, cur: dict, token: int, apply: Apply, replace_render: Callable[[bytes], None]) -> None:
     spec, files = cur["spec"], cur["files"]
     key = f"{name}-{token}"
     sims = dict(simulation_tables(spec))
     sheets = workbook_sheets(spec)
 
+    def edit():
+        _editor(cur, name, key, apply)
+
     if name in sheets:
-        book = files[WORKBOOK]
-        editors = {
-            sheets[0]: lambda: _floor_editor(cur, key, floor_table.schedule_columns, apply, True),
-            "Lifts Stacking Mix": lambda: _floor_editor(cur, key, floor_table.stacking_columns, apply, False),
-            "Amenities Stacking Mix": lambda: _floor_editor(cur, key, floor_table.amenity_columns, apply, False),
-            "Entrance Bias": lambda: _entrance_editor(cur, key, apply),
-            "Operator Profile": lambda: _profile_editor(cur, key, "operator_profile", apply),
-            "Amenities Profile": lambda: _profile_editor(cur, key, "amenities_profile", apply),
-            "Public Area Occupancy": lambda: _occupancy_editor(cur, key, apply),
-        }
-        _edit_and_file(editors[name], lambda: show_sheet(book, name))
-    elif name == "Architect report":
-        _edit_and_file(lambda: _story_editor(cur, key, apply), lambda: show_pdf(files[ARCHITECT]))
+        _edit_and_file(edit, lambda: show_sheet(files[WORKBOOK], name))
+    elif name == edits.ARCHITECT_REPORT:
+        _edit_and_file(edit, lambda: show_pdf(files[ARCHITECT]))
     elif name in sims:
-        pdf = files[simulation_file_name(spec, name)]
-        _edit_and_file(lambda: _simulation_editor(cur, key, name, sims[name], apply), lambda: show_pdf(pdf))
+        _edit_and_file(edit, lambda: show_pdf(files[simulation_file_name(spec, name)]))
     elif name == "Files":
         full_table(pd.DataFrame(upload_plan(files), columns=["File", "Upload to"]))
         with st.expander("Single files"):
@@ -265,10 +180,7 @@ def show_view(name: str, cur: dict, token: int, apply: Apply, rebuild_json: Call
     else:
         import json
 
-        text = st.text_area("project.json", json.dumps(spec, indent=2, ensure_ascii=False), height=460,
-                            key=key, label_visibility="collapsed")
-        if st.button("Apply", type="primary", key=f"{key}-go"):
-            rebuild_json(text)
+        st.code(json.dumps(spec, indent=2, ensure_ascii=False), language="json", height=460)
 
 
 def _images(cur: dict, token: int, replace_render: Callable[[bytes], None]) -> None:
