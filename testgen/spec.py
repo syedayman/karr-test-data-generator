@@ -26,6 +26,8 @@ from .assets import (
     MRL_SPEEDS,
     OPERATOR_RATES_APARTMENTS,
     OPERATOR_RATES_HOTEL,
+    RETAIL_PARKING_PER_CAR,
+    SCHOOL_PARKING_PER_CAR,
     TROLLEY_USE_RE,
     VALID_SPEEDS,
     Asset,
@@ -33,6 +35,7 @@ from .assets import (
     default_capacities,
     height_category,
     key_occupancy,
+    speed_divisor,
     unit_occupancy,
 )
 from .excel import ground_index
@@ -82,6 +85,13 @@ def passenger_served(spec: dict) -> tuple[int, int]:
     return top, bottom
 
 
+def counts_people(asset: Asset, floor: dict) -> bool:
+    """Floors KARR AI counts people on: the occupied ones, and for schools,
+    universities and retail their parking basements too."""
+    return bool(floor.get("occupied") or (
+        asset.key in ("schools", "universities", "retail") and floor.get("cars")))
+
+
 def floor_people(asset: Asset, spec: dict, floor: dict) -> float:
     """People on one floor, counted the way KARR AI counts them where it can."""
     star = spec["project_info"].get("hotel_star_rating") or "4-5"
@@ -93,13 +103,19 @@ def floor_people(asset: Asset, spec: dict, floor: dict) -> float:
         return sum(rates.get(t, 2.0) * n for t, n in floor["units"].items())
     if asset.key == "office" and floor.get("occupied") and floor.get("area_m2"):
         return floor["area_m2"] * 0.8 / 10
+    if asset.key == "retail" and floor.get("cars"):
+        return floor["cars"] * RETAIL_PARKING_PER_CAR
     if asset.key == "retail" and floor.get("area_m2"):
         return floor["area_m2"] / 5
     if asset.key == "car_parking" and floor.get("occupied") and floor.get("cars"):
         rate = CAR_OCCUPANCY.get(spec["project_info"].get("car_parking_facility_type"), 1.5)
         return floor["cars"] * rate
+    if asset.key in ("schools", "universities") and floor.get("cars"):
+        return floor["cars"] * SCHOOL_PARKING_PER_CAR
     if floor.get("classrooms"):
-        return floor["classrooms"] * floor.get("students_per_classroom", 0) * 0.10 + floor.get("staff", 0)
+        # Universities M1 sizes lifts on every student; otherwise 10% use lifts
+        share = 1.0 if (asset.key == "universities" and spec["model"] == "DBC-M1") else 0.10
+        return floor["classrooms"] * floor.get("students_per_classroom", 0) * share + floor.get("staff", 0)
     return 0.0
 
 
@@ -138,8 +154,8 @@ def derive(spec: dict) -> dict:
     fire_top, fire_bottom = 0, len(floors) - 1
     pass_travel = _travel(floors, top, bottom)
     fire_travel = _travel(floors, fire_top, fire_bottom)
-    population = round(sum(floor_people(asset, spec, f) for f in floors if f.get("occupied")))
-    divisor = asset.speed_divisor
+    population = round(sum(floor_people(asset, spec, f) for f in floors if counts_people(asset, f)))
+    divisor = speed_divisor(asset, spec["project_info"].get("hotel_star_rating"))
     min_speed = pass_travel / divisor if divisor else 1.0
     machine = "mrl" if min_speed <= 1.75 else "mra"
     return {
@@ -213,7 +229,8 @@ def make_simulations(rng: random.Random, spec: dict) -> dict | None:
         return None
     cores = spec["vt_criteria"].get("core_count") or 1
     chosen = spec.get("options") or {}
-    lift_users = sum(lift_people(spec, f) for f in spec["floors"] if f.get("occupied"))
+    lift_users = sum(lift_people(spec, f) for f in spec["floors"]
+                     if counts_people(asset_for(spec["asset"]), f))
     target = int(chosen.get("sim_lifts")
                  or max(2, min(10, math.ceil(lift_users / cores / _PER_LIFT[asset.key]))))
     speeds = sorted(chosen.get("sim_speeds") or _speeds(d["min_speed_mps"]))
@@ -638,7 +655,7 @@ MAX_SIM_ROWS = 60
 
 def car_park_sim_speed(spec: dict) -> float:
     """The one speed KARR AI accepts from a Car Parking M2 simulation (its M1 speed)."""
-    raw = derive(spec)["passenger_travel_m"] / asset_for(spec["asset"]).speed_divisor
+    raw = derive(spec)["passenger_travel_m"] / speed_divisor(asset_for(spec["asset"]))
     return next((s for s in VALID_SPEEDS if s >= raw - 1e-9), VALID_SPEEDS[-1])
 
 

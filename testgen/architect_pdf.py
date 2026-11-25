@@ -25,7 +25,7 @@ from reportlab.platypus import (
 )
 
 from .assets import asset_for
-from .spec import floor_people
+from .spec import counts_people, floor_people
 
 _STYLES = getSampleStyleSheet()
 _BODY = ParagraphStyle("body", parent=_STYLES["BodyText"], fontSize=10, leading=14, spaceAfter=6)
@@ -134,7 +134,8 @@ def build_architect_pdf(spec: dict, derived: dict, render_png: bytes,
     s.append(_table(rows, col_widths=widths))
     s.append(Spacer(1, 4 * mm))
     occupied = derived["occupied_floors"]
-    people = round(sum(floor_people(asset, spec, f) for f in spec["floors"] if f.get("occupied")))
+    people = round(sum(floor_people(asset, spec, f) for f in spec["floors"]
+                       if counts_people(asset, f)))
     s += [
         Paragraph(
             f"The building has {len(spec['floors'])} levels in total, of which {occupied} are occupied "

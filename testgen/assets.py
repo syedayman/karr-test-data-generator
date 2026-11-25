@@ -45,9 +45,18 @@ ASSETS: dict[str, Asset] = {
 
 BY_CLASSIFICATION = {a.classification: a for a in ASSETS.values()}
 
-# Hotel star tiers change the acceptable waiting time and room occupancy.
+# Hotel star tiers change the acceptable waiting time, room occupancy and the
+# passenger speed divisor (KARR AI hotel.py PASSENGER_SPEED_DIVISORS).
 HOTEL_STAR_AWT = {"1-2": 40, "3": 35, "4-5": 30}
+HOTEL_STAR_SPEED_DIVISOR = {"1-2": 35, "3": 25, "4-5": 20}
 HOTEL_STARS = ["1-2", "3", "4-5"]
+
+
+def speed_divisor(asset: Asset, stars: str | None = None) -> float:
+    """Passenger travel (m) / this = the minimum speed; hotels go by star tier."""
+    if asset.key == "hotel" and stars in HOTEL_STAR_SPEED_DIVISOR:
+        return HOTEL_STAR_SPEED_DIVISOR[stars]
+    return asset.speed_divisor
 
 
 def default_capacities(asset: Asset, stars: str | None = None) -> tuple[int, int]:
@@ -94,6 +103,11 @@ def residential_unit_occupancy(name: str) -> float:
 RESIDENTIAL_UNIT_OCCUPANCY = {t: residential_unit_occupancy(t) for t in RESIDENTIAL_UNIT_TYPES}
 HOTEL_APARTMENT_UNIT_OCCUPANCY = {"Studio": 1.0, "1BR": 1.5, "2BR": 2.5, "3BR": 3.5, "4BR": 4.5}
 HOTEL_KEY_OCCUPANCY = {"1-2": 1.5, "3": 1.5, "4-5": 1.8}
+# Schools and universities count a parking basement's cars x 1.5 as people
+# (KARR AI universities.py BASEMENT_OCCUPANCY_PER_CAR; schools the same)
+SCHOOL_PARKING_PER_CAR = 1.5
+# Retail: basement cars x 3 (KARR AI retail.py BASEMENT_OCCUPANCY_PER_CAR)
+RETAIL_PARKING_PER_CAR = 3.0
 CAR_OCCUPANCY = {"Independent": 1.5, "Retail/Mall Attached": 3.0}
 # People per parked car in KARR AI's Entrance Bias sheet (unitmix_processor_v2.write_entrance_bias_sheet_web).
 ENTRANCE_PEOPLE_PER_CAR = 1.5
