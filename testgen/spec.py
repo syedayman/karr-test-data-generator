@@ -227,7 +227,8 @@ def make_simulations(rng: random.Random, spec: dict) -> dict | None:
     needs_am = asset.hotel_like and building.get("has_amenities")
     if not (needs_guest or needs_op or needs_am):
         return None
-    cores = spec["vt_criteria"].get("core_count") or 1
+    # One core's share of the people, or the whole building's (Asset.sim_per_core)
+    cores = (spec["vt_criteria"].get("core_count") or 1) if asset.sim_per_core else 1
     chosen = spec.get("options") or {}
     lift_users = sum(lift_people(spec, f) for f in spec["floors"]
                      if counts_people(asset_for(spec["asset"]), f))

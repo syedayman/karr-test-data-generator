@@ -23,6 +23,10 @@ class Asset:
     single_sim: bool = False     # one guest simulation PDF instead of morning + evening
     entrance_bias_sheet: bool = False  # M2 workbook carries an Entrance Bias sheet
     hotel_like: bool = False     # operator / amenities toggles exist
+    # A simulation covers one core and KARR AI multiplies its lifts by the core
+    # count (BuildingTypeConfig.apply_core_multiplier); otherwise it covers the
+    # whole building and KARR AI shares its lifts out over the cores
+    sim_per_core: bool = False
 
 
 ASSETS: dict[str, Asset] = {
@@ -35,11 +39,11 @@ ASSETS: dict[str, Asset] = {
         Asset("hotel_apartments", "Hotel Apartments", 30, 35, 1350, 1600, 25,
               single_sim=True, entrance_bias_sheet=True, hotel_like=True),
         Asset("car_parking", "Car Parking", 9, 40, 1600, 1600, 30,
-              single_sim=True, entrance_bias_sheet=True),
+              single_sim=True, entrance_bias_sheet=True, sim_per_core=True),
         Asset("retail", "Retail/Shopping Centres and Malls", 10, 40, 2000, 2000, 25,
               supports_m2=False),
-        Asset("schools", "Schools", 5, 40, 1275, 1275, 25),
-        Asset("universities", "Universities", 5, 40, 1600, 2000, 25),
+        Asset("schools", "Schools", 5, 40, 1275, 1275, 25, sim_per_core=True),
+        Asset("universities", "Universities", 5, 40, 1600, 2000, 25, sim_per_core=True),
     ]
 }
 
