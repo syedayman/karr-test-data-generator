@@ -67,7 +67,7 @@ values are not stored: they are worked out from the floors.
 | `spec_version`, `asset`, `model` | format version, building type key, `DBC-M1` / `DBC-M2` |
 | `project_info` | the setup page's project fields (classification, name, client, architect, location, revision, header / footer, ...); `hotel_star_rating`, `car_parking_facility_type`, `car_parking_has_escalators` where they apply |
 | `building` | authority exceptions, preliminary lift counts; `has_operator`, `has_amenities` for hotels |
-| `vt_criteria` | `core_count`, `elevator_grouping`, `lobby_depth_m`, `serves_roof`, `multipurpose_elevator` |
+| `vt_criteria` | `core_count`, `elevator_grouping`, `lobby_depth_m`, `serves_roof`, `multipurpose_elevator`; `front_row_lifts` (lifts facing each other: how many in the first row, `null` for half, the bigger half first; KARR AI's lift drawings only) |
 | `space_planning` | `passenger_capacity_kg`, `fire_service_capacity_kg`, `machine_type` |
 | `unit_types` | residential / hotel apartments / hotel: unit or room types in schedule order |
 | `floors` | every floor, top first: `name`, `height_m`, `use`, `occupied`, `boarding`, and per type `units`, `area_m2`, `cars`, `classrooms`, `students_per_classroom`, `staff`, `amenity`, `rooftop` |

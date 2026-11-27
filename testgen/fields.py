@@ -44,6 +44,7 @@ class Field:
     choices: tuple = ()
     labels: tuple[tuple[Any, str], ...] = ()  # (choice, how it reads) where it reads differently
     span: int = 1  # columns it takes
+    blank: str = ""  # what the generator does when it picks no value
 
     def text(self, value) -> str:
         """How one choice reads."""
@@ -113,6 +114,9 @@ def project_fields() -> list[list[Field]]:
          Field("elevator_grouping", "Lift grouping", "choice", choices=tuple(GROUPINGS),
                labels=tuple(GROUPING_LABEL.items())),
          Field("lobby_depth_m", "Lobby depth (m)", "float", 1.5, 8.0, 0.5)],
+        # Lifts facing each other: how many stand in the first row (empty: half,
+        # the bigger half first). KARR AI's lift drawings only.
+        [Field("front_row_lifts", "Lifts in row 1", "int", 1, 4, blank="Half")],
         [Field("passenger_capacity_kg", "Passenger lift (kg)", "choice", choices=PASSENGER_KG),
          Field("fire_service_capacity_kg", "Fire/service lift (kg)", "choice", choices=FIRE_KG),
          Field("multipurpose_elevator", "Multipurpose lift", "yesno")],
@@ -141,7 +145,7 @@ def form(asset_key: str, model: str) -> list[tuple[str, int, list[list[Field]]]]
 def shown(field: Field, value) -> str:
     """The generator's pick as grey placeholder text."""
     if value is None:
-        return ""
+        return field.blank
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, tuple):

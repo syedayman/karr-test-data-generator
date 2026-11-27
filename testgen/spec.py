@@ -345,6 +345,12 @@ def check_options(asset: Asset, model: str, opts: dict) -> None:
         raise ValueError(f"Min per floor ({lo}) is above max ({hi}).")
 
 
+def _auto_grouping(rng: random.Random, opts: dict) -> str:
+    """The generator's grouping: lifts in a first row face a second one."""
+    picked = rng.choice(GROUPINGS)  # drawn either way, so the rest stays the same
+    return "facing_each_other" if opts.get("front_row_lifts") else picked
+
+
 def make_spec(asset_key: str, model: str, seed: int | None = None,
               options: dict | None = None, story: dict | None = None) -> dict:
     """Invent a project. `options` (see floors.py and README) fix any value.
@@ -406,9 +412,12 @@ def make_spec(asset_key: str, model: str, seed: int | None = None,
         "project_info": project_info,
         "building": {"has_authority_exceptions": bool(choose(opts, "authority_exceptions", False))},
         "vt_criteria": {
-            "elevator_grouping": choose(opts, "elevator_grouping", rng.choice(GROUPINGS)),
+            "elevator_grouping": choose(opts, "elevator_grouping", _auto_grouping(rng, opts)),
             "lobby_depth_m": float(choose(opts, "lobby_depth_m", rng.choice(LOBBY_DEPTHS_M))),
             "core_count": int(choose(opts, "core_count", 1)),
+            # Lifts in the first row when they face each other (None: half, the
+            # bigger half first); for KARR AI's lift drawings, not a Setup value
+            "front_row_lifts": opts.get("front_row_lifts"),
             "serves_roof": bool(opts.get("serves_roof", False)),
             "multipurpose_elevator": bool(choose(opts, "multipurpose_elevator",
                                                  asset.key == "schools" and model == "DBC-M1")),
@@ -526,6 +535,7 @@ def resolved_options(spec: dict) -> dict:
         "authority_exceptions": bool(b.get("has_authority_exceptions")),
         "core_count": vt.get("core_count") or 1,
         "elevator_grouping": vt.get("elevator_grouping"),
+        "front_row_lifts": vt.get("front_row_lifts"),
         "lobby_depth_m": vt.get("lobby_depth_m"),
         "serves_roof": bool(vt.get("serves_roof")),
         "multipurpose_elevator": bool(vt.get("multipurpose_elevator")),
@@ -611,6 +621,12 @@ def validate(spec: dict) -> list[str]:
         errors.append(f"M2 {asset.classification} needs more than {limit} occupied floors; this has {occ}.")
     if not 1 <= int(spec["vt_criteria"].get("core_count") or 1) <= 5:
         errors.append("vt_criteria.core_count must be 1-5.")
+    front_row = spec["vt_criteria"].get("front_row_lifts")
+    if front_row is not None:
+        if not isinstance(front_row, int) or not 1 <= front_row <= 4:
+            errors.append("vt_criteria.front_row_lifts must be 1-4.")
+        elif spec["vt_criteria"].get("elevator_grouping") != "facing_each_other":
+            errors.append("Lifts in row 1 needs lifts facing each other.")
     for f in floors:
         if any(not isinstance(n, int) or n < 0 for n in (f.get("units") or {}).values()):
             errors.append(f"Floor {f['name']}: unit counts must be whole numbers, 0 or more.")

@@ -126,6 +126,18 @@ def test_project_settings_do_not_reshuffle_the_building():
     assert tuned["options"]["location"] == "Abu Dhabi"
 
 
+def test_lifts_in_row_1_face_each_other_without_reshuffling_the_building():
+    plain = make_spec("residential", "DBC-M1", seed=9)
+    rows = make_spec("residential", "DBC-M1", seed=9, options={"front_row_lifts": 4})
+    assert rows["floors"] == plain["floors"]
+    assert rows["vt_criteria"]["front_row_lifts"] == 4
+    assert rows["vt_criteria"]["elevator_grouping"] == "facing_each_other"
+    assert validate(rows) == []
+    in_line = make_spec("residential", "DBC-M1", seed=9,
+                        options={"front_row_lifts": 4, "elevator_grouping": "in-line"})
+    assert "Lifts in row 1 needs lifts facing each other." in validate(in_line)
+
+
 def test_a_chosen_name_and_location_survive_the_ai_story():
     spec = make_spec("office", "DBC-M1", seed=1, options={"project_name": "Test Tower", "location": "Sharjah & N.E."})
     story = dict(spec["story"], project_name="AI Name", location="Dubai")
